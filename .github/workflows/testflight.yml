@@ -64,6 +64,8 @@ jobs:
           brew install xcodegen
           xcodegen
 
+      # Archive straight with the distribution identity, so Xcode makes App Store profiles
+      # (development profiles would need registered devices).
       - name: Archive
         run: |
           xcodebuild archive \
@@ -76,6 +78,7 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             -quiet
 
       - name: Upload to App Store Connect
