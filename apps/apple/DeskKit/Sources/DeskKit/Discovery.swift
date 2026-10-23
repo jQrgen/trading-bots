@@ -427,3 +427,57 @@ public struct GrokBotStatus: Decodable, Hashable, Sendable {
         return f
     }
 }
+
+/// GET /api/markets (latest per token) and /api/ticks?token= (one token's history) — what the scanners saw on Cauldron.
+public struct MarketTick: Decodable, Identifiable, Hashable, Sendable {
+    public var ts: Date
+    /// Missing on /api/ticks, which is already for one token.
+    public var tokenId: String?
+    public var symbol: String?
+    public var pricePusd: Double?
+    public var tvlBch: Double?
+    public var chg24hPct: Double?
+    public var volumeSats: Double?
+
+    public var id: String { tokenId ?? String(ts.timeIntervalSince1970) }
+
+    public init(ts: Date, tokenId: String? = nil, symbol: String? = nil, pricePusd: Double? = nil, tvlBch: Double? = nil,
+                chg24hPct: Double? = nil, volumeSats: Double? = nil) {
+        self.ts = ts
+        self.tokenId = tokenId
+        self.symbol = symbol
+        self.pricePusd = pricePusd
+        self.tvlBch = tvlBch
+        self.chg24hPct = chg24hPct
+        self.volumeSats = volumeSats
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ts = try c.decode(Date.self, forKey: .ts)
+        tokenId = try? c.decodeIfPresent(String.self, forKey: .tokenId)
+        symbol = try? c.decodeIfPresent(String.self, forKey: .symbol)
+        pricePusd = try? c.decodeIfPresent(Double.self, forKey: .pricePusd)
+        tvlBch = try? c.decodeIfPresent(Double.self, forKey: .tvlBch)
+        chg24hPct = (try? c.decodeIfPresent(Double.self, forKey: .chg24HPct)) ?? (try? c.decodeIfPresent(Double.self, forKey: .chg24hPct))
+        volumeSats = try? c.decodeIfPresent(Double.self, forKey: .volumeSats)
+    }
+
+    // convertFromSnakeCase capitalises each part, so "chg_24h_pct" arrives as "chg24HPct".
+    // The lowercase key covers a decoder without the key strategy.
+    enum CodingKeys: String, CodingKey { case ts, tokenId, symbol, pricePusd, tvlBch, chg24HPct, chg24hPct, volumeSats }
+
+    /// 24h volume in BCH.
+    public var volumeBch: Double? { volumeSats.map { $0 / 100_000_000 } }
+}
+
+/// Pretty-prints a JSON response, or returns nil for `null`.
+enum PrettyJSON {
+    static func format(_ data: Data) -> String? {
+        guard let obj = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]), !(obj is NSNull) else { return nil }
+        guard let out = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys, .fragmentsAllowed]) else {
+            return String(decoding: data, as: UTF8.self)
+        }
+        return String(decoding: out, as: UTF8.self)
+    }
+}

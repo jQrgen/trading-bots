@@ -287,4 +287,51 @@ public struct DemoDesk: DeskService {
                         stopOvershootPct: 3.1, finding: "Stop filled 3.1% past the level on a thin pool. Size smaller on pools under 10 BCH."),
         ]
     }
+
+    public func markets() async throws -> [MarketTick] {
+        [
+            MarketTick(ts: ago(6), tokenId: "furu", symbol: "FURU", pricePusd: 0.0000787, tvlBch: 38.2, chg24hPct: 6.4, volumeSats: 410_000_000),
+            MarketTick(ts: ago(6), tokenId: "zbch", symbol: "ZBCH", pricePusd: 0.0742, tvlBch: 21.5, chg24hPct: -1.8, volumeSats: 95_000_000),
+            MarketTick(ts: ago(6), tokenId: "lumen", symbol: "LUMEN", pricePusd: 0.0031, tvlBch: 12.6, chg24hPct: 22.0, volumeSats: 160_000_000),
+            MarketTick(ts: ago(6), tokenId: "dogecash", symbol: "DCASH", pricePusd: 0.0137, tvlBch: 4.1, chg24hPct: 14.0, volumeSats: 40_000_000),
+        ]
+    }
+
+    public func ticks(token: String, days: Int) async throws -> [MarketTick] {
+        let base = try await markets().first { $0.tokenId == token }?.pricePusd ?? 0.01
+        let points = 96
+        let minutes = Double(days) * 24 * 60
+        var out: [MarketTick] = []
+        for i in 0..<points {
+            let t = Double(i) / Double(points - 1)
+            let wave = sin(t * 9) * 0.04 + (t - 1) * 0.08
+            let price = base * (1 + wave)
+            out.append(MarketTick(ts: ago(minutes * (1 - t)), pricePusd: price, tvlBch: 20 + t * 5))
+        }
+        return out
+    }
+
+    public func fileHistory(path: String) async throws -> [KnowledgeVersion] {
+        guard let f = demoFiles.first(where: { $0.path == path }) else { return [] }
+        var versions: [KnowledgeVersion] = []
+        for v in stride(from: f.version, through: max(1, f.version - 2), by: -1) {
+            let body: String = v == f.version ? (f.body ?? "") : "# Earlier draft (v\(v))"
+            versions.append(KnowledgeVersion(version: v, body: body, updatedBy: f.updatedBy ?? "–", updatedAt: ago(Double(f.version - v + 1) * 30)))
+        }
+        return versions
+    }
+
+    public func scorecards(days: Int) async throws -> [Scorecard] {
+        var out: [Scorecard] = []
+        for d in stride(from: min(days, 14), through: 0, by: -1) {
+            let pnl = 31.8 * Double(14 - d) / 14 + sin(Double(d)) * 2
+            out.append(Scorecard(ts: ago(Double(d) * 24 * 60), windowDays: 30,
+                                 overall: .init(trades: 9 - d / 2, winRate: 0.6, avgPnlPct: 3, pnlPusd: pnl), byHorizon: [:], bySignal: [:]))
+        }
+        return out
+    }
+
+    public func briefing() async throws -> String? {
+        PrettyJSON.format(Data(#"{"cycle":412,"mode":"paper","signals":[{"symbol":"FURU","kind":"volume-spike","ratio":3.2}],"open_positions":2}"#.utf8))
+    }
 }

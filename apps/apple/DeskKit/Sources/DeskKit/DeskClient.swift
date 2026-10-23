@@ -35,6 +35,16 @@ public protocol DeskService: Sendable {
     func liquidity() async throws -> [LiquidityPosition]
     /// Zara's reviews of closed trades.
     func reviews() async throws -> [TradeReview]
+    /// The latest market tick for each token, by TVL.
+    func markets() async throws -> [MarketTick]
+    /// One token's price history, oldest first.
+    func ticks(token: String, days: Int) async throws -> [MarketTick]
+    /// Every past version of a shared note, newest first.
+    func fileHistory(path: String) async throws -> [KnowledgeVersion]
+    /// Scorecards over the last `days` days, oldest first, for the P&L-over-time line.
+    func scorecards(days: Int) async throws -> [Scorecard]
+    /// The JSON Grok Bot read at its latest briefing, pretty-printed, or nil before the first one.
+    func briefing() async throws -> String?
 }
 
 public enum DeskError: LocalizedError, Equatable {
@@ -146,6 +156,24 @@ public struct DeskClient: DeskService {
     public func files() async throws -> [BotFile] { try await list("api/files") }
     public func liquidity() async throws -> [LiquidityPosition] { try await list("api/liquidity") }
     public func reviews() async throws -> [TradeReview] { try await list("api/reviews") }
+    public func markets() async throws -> [MarketTick] { try await list("api/markets") }
+
+    public func ticks(token: String, days: Int) async throws -> [MarketTick] {
+        try await list("api/ticks", ["token": token, "days": "\(days)"])
+    }
+
+    public func fileHistory(path: String) async throws -> [KnowledgeVersion] {
+        try await list("api/files/" + path, ["history": "1"])
+    }
+
+    public func scorecards(days: Int) async throws -> [Scorecard] {
+        try await list("api/scorecards", ["days": "\(days)"])
+    }
+
+    public func briefing() async throws -> String? {
+        let raw = try await fetch("api/briefing")
+        return PrettyJSON.format(raw)
+    }
 
     public func file(path: String) async throws -> BotFile {
         // The Worker decodes the rest of the URL, so slashes in the path can stay as they are.
@@ -174,6 +202,15 @@ public struct DeskClient: DeskService {
     }
 
     private func get<T: Decodable>(_ path: String, _ query: [String: String] = [:]) async throws -> T {
+        let data = try await fetch(path, query)
+        do {
+            return try DeskDecoder.make().decode(T.self, from: data)
+        } catch {
+            throw DeskError.decoding(path: "/" + path, detail: String(describing: error))
+        }
+    }
+
+    private func fetch(_ path: String, _ query: [String: String] = [:]) async throws -> Data {
         var req = URLRequest(url: url(path, query))
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -182,10 +219,6 @@ public struct DeskClient: DeskService {
             let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
             throw DeskError.http(status: http.statusCode, message: message)
         }
-        do {
-            return try DeskDecoder.make().decode(T.self, from: data)
-        } catch {
-            throw DeskError.decoding(path: "/" + path, detail: String(describing: error))
-        }
+        return data
     }
 }

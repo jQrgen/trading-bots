@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 import DeskKit
 
 /// Everything the team knows and has learned, all read from the database: the scorecard,
@@ -10,6 +11,17 @@ struct PlaybookView: View {
         List {
             Section {
                 StatusBanner()
+            }
+            if store.scorecardHistory.count >= 2 {
+                Section {
+                    PnlHistoryChart(cards: store.scorecardHistory)
+                        .frame(height: Metrics.chartHeight)
+                        .tvFocusable()
+                } header: {
+                    Text("Realised P&L over time")
+                } footer: {
+                    Text("The scorecard's rolling P&L at each cycle over the last 90 days.")
+                }
             }
             if let card = store.scorecard {
                 ScorecardSection(card: card)
@@ -102,6 +114,25 @@ struct PlaybookView: View {
         case "owner": "edited by you"
         case "seed": "starter version"
         default: "edited by \(store.team.displayName(who))"
+        }
+    }
+}
+
+struct PnlHistoryChart: View {
+    var cards: [Scorecard]
+
+    var body: some View {
+        let points = cards.compactMap { c in c.ts.map { (ts: $0, pnl: c.overall.pnlPusd) } }
+        let color: Color = (points.last?.pnl ?? 0) < 0 ? .down : .up
+        Chart {
+            ForEach(Array(points.enumerated()), id: \.offset) { _, p in
+                LineMark(x: .value("Time", p.ts), y: .value("PUSD", p.pnl))
+                    .foregroundStyle(color)
+                    .interpolationMethod(.monotone)
+            }
+            RuleMark(y: .value("Zero", 0))
+                .foregroundStyle(.secondary)
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
         }
     }
 }

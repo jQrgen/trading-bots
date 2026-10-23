@@ -8,8 +8,8 @@ A native SwiftUI app that shows what the bot team is doing. It is **read-only**:
 | Agents | Reporting structure, each agent's live status, role document, tools, its own activity log and its exact Grok prompts and replies |
 | Activity | Every event the bots log (scan, signal, proposal, risk pass/fail, decision, fill, journal…), filterable by agent, with the raw data |
 | Trades | Trade ideas (with bull and bear case, risk check and decision), fills, open and closed positions (with Zara's review), and paper liquidity positions (deposit, estimated fees, impermanent loss) |
-| Research | The mood on X about BCH and Cauldron, every new token on Cauldron and the launchpad with its research status, Vela's research notes (verdict, how it could make money, sources) and launchpad sales |
-| Playbook | The scorecard (by horizon, signal and holding time), Zara's trade reviews, the strategy, risk limits and market notes (with version history), the agents' shared notes, Zara's daily reports and the lessons |
+| Research | Market prices for every Cauldron pool (with a price chart per token), the full JSON of Grok Bot's latest briefing, the mood on X about BCH and Cauldron, every new token on Cauldron and the launchpad with its research status, Vela's research notes (verdict, how it could make money, sources) and launchpad sales |
+| Playbook | Realised P&L over time, the scorecard (by horizon, signal and holding time), Zara's trade reviews, the strategy, risk limits and market notes (with version history), the agents' shared notes, Zara's daily reports and the lessons |
 
 On the Mac it's a proper desktop app rather than a stretched phone layout:
 
@@ -76,6 +76,10 @@ The app reads these endpoints from `src/index.ts` (snake_case JSON, epoch-millis
 | `GET /api/launchpad` | Launchpad sales (`data` is a JSON string) |
 | `GET /api/files`, `/api/files/<path>` | The agents' shared notes; the text only on the single-file call |
 | `GET /api/liquidity` | Paper liquidity positions, open first |
+| `GET /api/markets`, `/api/ticks?token=&days=` | Latest tick per token; one token's price series (oldest first) |
+| `GET /api/briefing` | The JSON Grok Bot read at its latest briefing (or `null`) |
+| `GET /api/files/<path>?history=1` | Every version of a shared note |
+| `GET /api/scorecards?days=90` | Scorecard history for the P&L-over-time chart |
 | `GET /api/reviews` | Zara's per-trade reviews (process clean/minor/major, outcome in PUSD and R) |
 
 Decoding is lenient: unknown fields are ignored, missing optional fields are fine, and a malformed row is dropped rather than failing the whole screen. If the Worker's response shapes change, update `DeskKit/Sources/DeskKit/Models.swift` and the fixtures in `DeskKitTests`.
