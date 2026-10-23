@@ -367,7 +367,7 @@ final class MarketTests: XCTestCase {
     }
 
     func testFileHistoryAllowsMissingAuthor() throws {
-        let h = #"[{"version":3,"body":"# v3","updated_by":null,"updated_at":1761220800000},{"version":2,"body":"# v2","updated_by":"vela","updated_at":1761217200000}]"#
+        let h = ##"[{"version":3,"body":"# v3","updated_by":null,"updated_at":1761220800000},{"version":2,"body":"# v2","updated_by":"vela","updated_at":1761217200000}]"##
         let versions = try decoder.decode(LossyArray<KnowledgeVersion>.self, from: Data(h.utf8)).items
         XCTAssertEqual(versions.map(\.version), [3, 2])
         XCTAssertEqual(versions[1].updatedBy, "vela")
