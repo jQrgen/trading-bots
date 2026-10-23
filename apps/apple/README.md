@@ -7,9 +7,9 @@ A native SwiftUI app that shows what the bot team is doing. It is **read-only**:
 | Desk | Total value in PUSD, P&L since start and over 24h, win rate, balance chart (24h to 90d), holdings, open positions, agent tiles, latest activity |
 | Agents | Reporting structure, each agent's live status, role document, tools, its own activity log and its exact Grok prompts and replies |
 | Activity | Every event the bots log (scan, signal, proposal, risk pass/fail, decision, fill, journal…), filterable by agent, with the raw data |
-| Trades | Trade ideas (with bull and bear case, risk check and decision), fills, open positions and closed positions |
+| Trades | Trade ideas (with bull and bear case, risk check and decision), fills, open and closed positions (with Zara's review), and paper liquidity positions (deposit, estimated fees, impermanent loss) |
 | Research | The mood on X about BCH and Cauldron, every new token on Cauldron and the launchpad with its research status, Vela's research notes (verdict, how it could make money, sources) and launchpad sales |
-| Playbook | The scorecard, the strategy, risk limits and market notes (with version history), the agents' shared notes, Zara's daily reports and the lessons |
+| Playbook | The scorecard (by horizon, signal and holding time), Zara's trade reviews, the strategy, risk limits and market notes (with version history), the agents' shared notes, Zara's daily reports and the lessons |
 
 On the Mac it's a proper desktop app rather than a stretched phone layout:
 
@@ -58,7 +58,7 @@ The app reads these endpoints from `src/index.ts` (snake_case JSON, epoch-millis
 
 | Endpoint | Used for |
 |---|---|
-| `GET /api/state` | Mode, halted flag, totals, holdings, open positions marked to market, agent statuses, win rate |
+| `GET /api/state` | Mode, halted flag, totals, holdings, open positions marked to market, agent statuses, win rate, and when Grok Bot last connected or was rejected |
 | `GET /api/events?after=<id>&limit=` | Activity log (incremental) |
 | `GET /api/snapshots?days=N` | Balance chart (oldest first) |
 | `GET /api/trades` | Fills |
@@ -75,6 +75,8 @@ The app reads these endpoints from `src/index.ts` (snake_case JSON, epoch-millis
 | `GET /api/sentiment?subject=token\|cauldron\|bch` | Mood on X, score -1 to +1 |
 | `GET /api/launchpad` | Launchpad sales (`data` is a JSON string) |
 | `GET /api/files`, `/api/files/<path>` | The agents' shared notes; the text only on the single-file call |
+| `GET /api/liquidity` | Paper liquidity positions, open first |
+| `GET /api/reviews` | Zara's per-trade reviews (process clean/minor/major, outcome in PUSD and R) |
 
 Decoding is lenient: unknown fields are ignored, missing optional fields are fine, and a malformed row is dropped rather than failing the whole screen. If the Worker's response shapes change, update `DeskKit/Sources/DeskKit/Models.swift` and the fixtures in `DeskKitTests`.
 

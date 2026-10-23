@@ -25,6 +25,8 @@ public struct DeskState: Decodable, Sendable {
     public var positions: [Position]
     public var agents: [AgentStatus]
     public var stats: Stats
+    /// When the Grok Bot app last talked to the desk, and why a call was last rejected.
+    public var grokBot: GrokBotStatus?
 
     public struct Stats: Decodable, Sendable {
         public var closed: Int
@@ -51,7 +53,7 @@ public struct DeskState: Decodable, Sendable {
     }
 
     public init(mode: TradingMode, halted: Bool, startPusd: Double?, totalPusd: Double?, updatedAt: Date?, bchPusd: Double?,
-                holdings: [Holding], positions: [Position], agents: [AgentStatus], stats: Stats) {
+                holdings: [Holding], positions: [Position], agents: [AgentStatus], stats: Stats, grokBot: GrokBotStatus? = nil) {
         self.mode = mode
         self.halted = halted
         self.startPusd = startPusd
@@ -62,6 +64,7 @@ public struct DeskState: Decodable, Sendable {
         self.positions = positions
         self.agents = agents
         self.stats = stats
+        self.grokBot = grokBot
     }
 
     public init(from decoder: Decoder) throws {
@@ -76,10 +79,11 @@ public struct DeskState: Decodable, Sendable {
         positions = (try? c.decodeIfPresent(LossyArray<Position>.self, forKey: .positions))?.items ?? []
         agents = (try? c.decodeIfPresent(LossyArray<AgentStatus>.self, forKey: .agents))?.items ?? []
         stats = (try? c.decodeIfPresent(Stats.self, forKey: .stats)) ?? Stats()
+        grokBot = try? c.decodeIfPresent(GrokBotStatus.self, forKey: .grokBot)
     }
 
     enum CodingKeys: String, CodingKey {
-        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats
+        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats, grokBot
     }
 
     /// Profit since the paper (or live) start balance.
@@ -315,7 +319,8 @@ public struct Trade: Decodable, Identifiable, Hashable, Sendable {
         case id, ts, cycle, mode, side, tokenId, symbol, amount, pusd, pricePusd, impactPct, estimated, positionId, reason
     }
 
-    public var isBuy: Bool { side == "buy" }
+    /// Buying a token or putting liquidity into a pool.
+    public var isBuy: Bool { side == "buy" || side == "lp-in" }
 }
 
 /// GET /api/snapshots?days=N — balance history, oldest first.

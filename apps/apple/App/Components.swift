@@ -234,10 +234,11 @@ struct StatusBanner: View {
 
     var body: some View {
         if store.service is DemoDesk {
-            banner("Showing demo data. Add your desk's Worker URL in Settings to see the real bots.", symbol: "sparkles", tint: .blue)
+            banner("Showing demo data. Choose \"Use the live desk\" in Settings to see the real bots.", symbol: "sparkles", tint: .blue)
         } else if let error = store.lastError {
             banner(error, symbol: "exclamationmark.triangle.fill", tint: .orange)
         }
+        GrokBotBanner()
     }
 
     private func banner(_ text: String, symbol: String, tint: Color) -> some View {

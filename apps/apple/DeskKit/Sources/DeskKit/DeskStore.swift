@@ -21,6 +21,8 @@ public final class DeskStore {
     public private(set) var sentiment: [SentimentReading] = []
     public private(set) var launchpad: [LaunchpadSale] = []
     public private(set) var files: [BotFile] = []
+    public private(set) var liquidity: [LiquidityPosition] = []
+    public private(set) var reviews: [TradeReview] = []
 
     public private(set) var isLoading = false
     public private(set) var lastRefresh: Date?
@@ -56,6 +58,8 @@ public final class DeskStore {
         sentiment = []
         launchpad = []
         files = []
+        liquidity = []
+        reviews = []
         lastRefresh = nil
         lastError = nil
         await refresh()
@@ -89,6 +93,8 @@ public final class DeskStore {
         async let sentimentTask = capture { try await service.sentiment(subject: nil) }
         async let launchpadTask = capture { try await service.launchpad() }
         async let filesTask = capture { try await service.files() }
+        async let liquidityTask = capture { try await service.liquidity() }
+        async let reviewsTask = capture { try await service.reviews() }
 
         switch await stateTask { case .success(let v): state = v; case .failure(let e): note(e) }
         switch await eventsTask { case .success(let v): merge(events: v); case .failure(let e): note(e) }
@@ -109,6 +115,8 @@ public final class DeskStore {
         switch await sentimentTask { case .success(let v): sentiment = v.sorted { $0.ts > $1.ts }; case .failure(let e): note(e) }
         switch await launchpadTask { case .success(let v): launchpad = v.sorted { $0.firstSeen > $1.firstSeen }; case .failure(let e): note(e) }
         switch await filesTask { case .success(let v): files = v.sorted { $0.updatedAt > $1.updatedAt }; case .failure(let e): note(e) }
+        switch await liquidityTask { case .success(let v): liquidity = v; case .failure(let e): note(e) }
+        switch await reviewsTask { case .success(let v): reviews = v.sorted { $0.ts > $1.ts }; case .failure(let e): note(e) }
 
         lastError = firstError?.localizedDescription
         if firstError == nil || state != nil { lastRefresh = Date() }
@@ -193,6 +201,17 @@ public final class DeskStore {
     /// The latest reading for the BCH market and for Cauldron, in that order, when there is one.
     public var marketMood: [SentimentReading] {
         ["bch", "cauldron"].compactMap { subject in sentiment.first { $0.subject == subject } }
+    }
+
+    public var openLiquidity: [LiquidityPosition] { liquidity.filter(\.isOpen) }
+
+    public var closedLiquidity: [LiquidityPosition] {
+        liquidity.filter { !$0.isOpen }.sorted { ($0.closedAt ?? $0.openedAt) > ($1.closedAt ?? $1.openedAt) }
+    }
+
+    /// Zara's review of a closed position, once she has written it.
+    public func review(of positionId: Int) -> TradeReview? {
+        reviews.first { $0.positionId == positionId }
     }
 
     /// Research notes about one token, newest first.

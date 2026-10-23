@@ -50,6 +50,15 @@ struct PlaybookView: View {
             } footer: {
                 Text("Files the agents keep for each other in the database, such as watchlists and handovers.")
             }
+            if !store.reviews.isEmpty {
+                Section {
+                    ForEach(store.reviews.prefix(20)) { ReviewRow(review: $0) }
+                } header: {
+                    Text("Trade reviews")
+                } footer: {
+                    Text("Zara grades each closed trade's process separately from its result. R is the result in multiples of the planned risk.")
+                }
+            }
             Section("Daily reports") {
                 if store.journal.isEmpty {
                     Text("Zara writes the first journal entry tonight.").foregroundStyle(.secondary)
@@ -108,6 +117,9 @@ struct ScorecardSection: View {
             }
             ForEach(card.bySignal.keys.sorted(), id: \.self) { key in
                 bucketRow("Signal: " + key, card.bySignal[key]!)
+            }
+            ForEach(Array(card.holdingTimes.enumerated()), id: \.offset) { _, row in
+                bucketRow("Held " + row.label, row.bucket)
             }
         } header: {
             Text("Scorecard" + (card.windowDays.map { ", last \($0) days" } ?? ""))

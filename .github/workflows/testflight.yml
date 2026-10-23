@@ -28,8 +28,15 @@ jobs:
         include:
           - platform: iOS
             destination: generic/platform=iOS
+            # Signing at archive time makes a new development certificate on every fresh runner, and Apple
+            # refuses once the account's limit is reached. The iOS app has no entitlements, so archive it
+            # unsigned and let the export sign it for the App Store.
+            archive_flags: CODE_SIGNING_ALLOWED=NO
           - platform: macOS
             destination: generic/platform=macOS
+            # Same certificate limit, but the Mac app needs its sandbox entitlements in the archive,
+            # so sign it ad hoc rather than not at all, and let the export sign it for the App Store.
+            archive_flags: CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- PROVISIONING_PROFILE_SPECIFIER=
           - platform: tvOS
             destination: generic/platform=tvOS
             # Automatic signing would need a development profile, which needs a registered Apple TV.
