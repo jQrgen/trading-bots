@@ -26,6 +26,26 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(s.positions.first?.targetPct, 20)
         XCTAssertEqual(s.agents.first?.agent, "orin")
         XCTAssertEqual(s.stats.winRate, 0.75)
+        XCTAssertNil(s.runner)
+    }
+
+    func testRunner() throws {
+        let json = """
+        {"mode":"paper","halted":false,"holdings":[],"positions":[],"agents":[],"stats":{"closed":0,"wins":0},
+         "runner":{"name":"Cauldron Trader","brain":"grok-bot","cycle":27,"state":"complete","updated_at":1761220800000,"next_run_at":1761221700000,"next_journal_at":1761238800000}}
+        """
+        let s = try decoder.decode(DeskState.self, from: Data(json.utf8))
+        XCTAssertEqual(s.runner?.name, "Cauldron Trader")
+        XCTAssertEqual(s.runner?.cycle, 27)
+        XCTAssertEqual(s.runner?.state, "complete")
+        XCTAssertTrue(s.runner?.summary.contains("cycle 27") == true)
+        XCTAssertTrue(s.runner?.summary.contains("done") == true)
+        let member = try XCTUnwrap(Team.fallback.member("orin"))
+        let event = DeskEvent(id: 9, ts: Date(timeIntervalSince1970: 1_761_220_800), cycle: 27, agent: "orin", kind: "scan", message: "Scanned 40 tokens, 8 signals")
+        let idle = AgentCard(member: member, status: "idle, waiting for Grok Bot", updatedAt: nil, lastEvent: event)
+        XCTAssertEqual(idle.displayStatus, "Cycle 27: Scanned 40 tokens, 8 signals")
+        let live = AgentCard(member: member, status: "Cycle 27: 8 signals · next 16:20 UTC", updatedAt: nil, lastEvent: event)
+        XCTAssertEqual(live.displayStatus, "Cycle 27: 8 signals · next 16:20 UTC")
     }
 
     func testStateBeforeFirstCycle() throws {
@@ -106,7 +126,8 @@ final class StoreTests: XCTestCase {
         XCTAssertNil(store.lastError)
         XCTAssertEqual(store.state?.mode, .paper)
         XCTAssertEqual(store.agentCards.count, 6)
-        XCTAssertNotNil(store.agentCards.first { $0.id == "kade" }?.status)
+        XCTAssertEqual(store.state?.runner?.cycle, 412)
+        XCTAssertFalse(store.agentCards.contains { $0.displayStatus.localizedCaseInsensitiveContains("idle, waiting") })
         XCTAssertFalse(store.events.isEmpty)
         XCTAssertEqual(store.events.map(\.id), store.events.map(\.id).sorted(by: >))
         XCTAssertEqual(store.openPositions.count, 2)

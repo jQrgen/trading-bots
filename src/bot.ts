@@ -22,6 +22,7 @@ import {
   type Verdict,
 } from "./loop";
 import { configureEndpoints } from "./cauldron";
+import { noteRunning, publishRoleStatus } from "./roles";
 import GROK_BOT from "../GROK_BOT.md";
 import type { Proposal } from "./risk";
 
@@ -121,8 +122,9 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
   if (p === "/api/bot/briefing" && req.method === "GET") {
     const L = await newCycle(env);
     await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('bot_cycle', ?)").bind(JSON.stringify({ cycle: L.cycle, ts: Date.now() })).run();
+    await noteRunning(env, L.cycle);
     await L.log("desk", "cycle", `Grok Bot started cycle ${L.cycle}.`);
-    await L.status("orin", "scanning Cauldron");
+    await L.status("orin", `Cycle ${L.cycle}: scanning Cauldron`);
     const ctx = await loadCtx(env, L);
     const k = await loadKnowledge(env);
     const out = {
@@ -165,15 +167,17 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
   if (req.method !== "POST") return json({ error: "not found" }, 404);
   if (p === "/api/bot/journal") {
     if (typeof body.journal !== "string") return json({ error: "need journal (string), lessons (string[]), optional strategy_suggestion" }, 400);
-    const L = new Ledger(env, 0);
+    const L = new Ledger(env, await openCycle(env));
     const lessons = Array.isArray(body.lessons) ? body.lessons.map(String).slice(0, 5) : [];
     await recordJournal(env, L, body.journal, lessons, typeof body.strategy_suggestion === "string" ? body.strategy_suggestion : undefined);
+    await publishRoleStatus(env);
     return json({ ok: true });
   }
 
   if (p === "/api/bot/reviews") {
     const reviews = (Array.isArray(body.reviews) ? body.reviews : []).slice(0, 20) as Review[];
-    const saved = await recordReviews(env, new Ledger(env, 0), reviews);
+    const saved = await recordReviews(env, new Ledger(env, await openCycle(env)), reviews);
+    await publishRoleStatus(env);
     return json({ ok: true, saved, ignored: reviews.length - saved });
   }
 
@@ -212,11 +216,21 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
     const kade = (Array.isArray(body.kade) ? body.kade : []) as Verdict[];
     const nova = (Array.isArray(body.nova) ? body.nova : []) as Decision[];
     const out = await decideAndExecute(env, L, ctx, kade, nova, typeof body.note === "string" ? body.note : undefined);
-    for (const a of ["orin", "vela", "kade", "nova", "rune"] as const) await L.status(a, "idle, waiting for Grok Bot");
+    await publishRoleStatus(env);
     return json({ ...out, next_step: "cycle complete" });
   }
 
   return json({ error: "not found" }, 404);
+}
+
+async function openCycle(env: Env) {
+  const cur = await env.DB.prepare("SELECT value FROM settings WHERE key = 'bot_cycle'").first<{ value: string }>();
+  if (!cur) return 0;
+  try {
+    return Number(JSON.parse(cur.value).cycle) || 0;
+  } catch {
+    return 0;
+  }
 }
 
 const MAX_FILE = 200_000;

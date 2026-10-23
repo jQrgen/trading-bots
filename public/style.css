@@ -35,6 +35,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 8px 16px 24px; display: grid;
 .agent b { font: 700 12px ui-monospace, monospace; letter-spacing: .15em; color: var(--c); }
 .agent .role { color: var(--muted); font-size: 12px; }
 .agent .status { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
+.agent .when { margin-top: 6px; font-size: 11px; color: var(--muted); }
 .agent .last { margin-top: 6px; font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .chart { height: 220px; }
 .chart.small { height: 140px; }

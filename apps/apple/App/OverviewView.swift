@@ -135,10 +135,10 @@ struct AgentTile: View {
                     }
                 }
                 Text(card.member.role).font(.caption).foregroundStyle(.secondary)
-                Text(card.status ?? "Waiting for first cycle")
+                Text(card.displayStatus)
                     .font(.callout)
-                    .lineLimit(2)
-                    .foregroundStyle(card.status == nil ? .secondary : .primary)
+                    .lineLimit(4)
+                    .foregroundStyle(card.status == nil && card.lastEvent == nil ? .secondary : .primary)
             }
         }
         .padding(Metrics.padding * 0.75)

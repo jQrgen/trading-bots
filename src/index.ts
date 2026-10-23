@@ -3,6 +3,7 @@ import { runCycle, runJournal } from "./loop";
 import { botKey, checkBotToken, handleBot } from "./bot";
 import GROK_BOT from "../GROK_BOT.md";
 import { loadKnowledge, parseRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
+import { describeRoles } from "./roles";
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
@@ -58,8 +59,11 @@ export default {
       if (p === "/api/team") {
         await seedKnowledge(env);
         const team = JSON.parse((await loadKnowledge(env)).get("team") ?? "{}") as { agents?: { id: string }[] };
-        const status = new Map((await env.DB.prepare("SELECT agent, status, updated_at FROM agent_status").all<{ agent: string; status: string; updated_at: number }>()).results.map((r) => [r.agent, r]));
-        return json({ ...team, agents: (team.agents ?? []).map((a) => ({ ...a, status: status.get(a.id)?.status ?? null, status_at: status.get(a.id)?.updated_at ?? null })) });
+        const roles = await describeRoles(env).catch(() => null);
+        const status = roles
+          ? new Map(roles.agents.map((r) => [r.agent, r]))
+          : new Map((await env.DB.prepare("SELECT agent, status, updated_at FROM agent_status").all<{ agent: string; status: string; updated_at: number }>()).results.map((r) => [r.agent, r]));
+        return json({ ...team, runner: roles?.runner ?? null, agents: (team.agents ?? []).map((a) => ({ ...a, status: status.get(a.id)?.status ?? null, status_at: status.get(a.id)?.updated_at ?? null })) });
       }
       if (p === "/api/risk-limits") return json(parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}"));
       if (p === "/api/scorecard") {
@@ -190,6 +194,7 @@ async function state(env: Env) {
     db.prepare("SELECT ts, total_pusd FROM snapshots ORDER BY ts DESC LIMIT 1").first<{ ts: number; total_pusd: number }>(),
   ]);
   const s = Object.fromEntries(settings.results.map((r) => [r.key, r.value]));
+  const roles = await describeRoles(env).catch(() => null);
   const marks = s.marks ? (JSON.parse(s.marks) as { prices: Record<string, number>; decimals: Record<string, number>; bch_pusd: number; ts: number }) : null;
   const value = (asset: string, amount: number) =>
     asset === "pusd" ? amount / 100 : marks?.prices[asset] ? (amount / 10 ** (marks.decimals[asset] ?? 0)) * marks.prices[asset] : 0;
@@ -207,7 +212,8 @@ async function state(env: Env) {
       const v = value(String(p.token_id), Number(p.amount));
       return { ...p, value_pusd: v, pnl_pct: ((v - Number(p.cost_pusd)) / Number(p.cost_pusd)) * 100 };
     }),
-    agents: agents.results,
+    agents: roles?.agents ?? agents.results,
+    runner: roles?.runner ?? null,
     grok_bot: {
       token_created_at: s.bot_token_created_at ? Number(s.bot_token_created_at) : null,
       last_seen: s.bot_last_seen ? Number(s.bot_last_seen) : null,

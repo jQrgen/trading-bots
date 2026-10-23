@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PUSD } from "../src/config";
-import { Prices, simulateSwap } from "../src/market";
+import { Prices, routePools, satsOut, simulateSwap, tokensOut } from "../src/market";
 import { parseJson } from "../src/grok";
 import type { TokenInfo } from "../src/cauldron";
 
@@ -44,6 +44,43 @@ describe("simulateSwap", () => {
     // 100 PUSD is ~35000 tokens at mid; estimate must come in below that.
     expect(fill.amountOut).toBeGreaterThan(30000);
     expect(fill.amountOut).toBeLessThan(35000);
+  });
+});
+
+describe("pool reserves", () => {
+  it("applies the 0.3% fee on a single pool", () => {
+    // 1e6 sats, 5e6 tokens, spend 10_000 sats. fee = 30. Remaining tokens are
+    // ceil(k / (sats + dx - fee)) so the pool keeps k; the trader gets 49_357.
+    expect(tokensOut(1_000_000n, 5_000_000n, 10_000n)).toBe(49_357n);
+    const back = satsOut(1_000_000n, 5_000_000n, 49_357n);
+    expect(back).toBeGreaterThan(9_000n);
+    expect(back).toBeLessThan(10_000n);
+  });
+
+  it("fills from pool reserves when the router quote is about 3x off", async () => {
+    // Reserves from the MINTY book (decimals 2) and the PUSD book on 2026-10-23.
+    // The live router quoted ~113.5e6 MINTY base units for 20 PUSD; the pools clear ~35e6.
+    const minty = "b".repeat(64);
+    const book = new Map<string, { sats: number; tokens: number }[]>([
+      [PUSD, [{ sats: 44_968_662_085, tokens: 12_860_978 }]],
+      [minty, [{ sats: 1_378_269_816, tokens: 7_007_194_153 }]],
+    ]);
+    const prices = new Prices(new Map([
+      [PUSD, { token_id: PUSD, tvl_sats: 45e9, tvl_tokens: 1.28e7, price_now: 349_652, bcmr: { token: { decimals: 2 } } }],
+      [minty, { token_id: minty, tvl_sats: 1_378_269_816, tvl_tokens: 7_007_194_153, price_now: 19.669, bcmr: { token: { decimals: 2 } } }],
+    ]));
+    const quote = async (sell: string) =>
+      sell === PUSD
+        ? { input_amount: "2000", output_amount: "8963282", market_pre_price: "3461.47", market_post_price: "3461.39" }
+        : { input_amount: "8954286", output_amount: "113525741", market_pre_price: "0.15409", market_post_price: "0.15655" };
+    const fill = await simulateSwap(PUSD, minty, 2000, prices, quote, async (id) => book.get(id) ?? []);
+    expect(fill.reservePriced).toBe(true);
+    expect(fill.estimated).toBe(false);
+    expect(fill.amountOut).toBeGreaterThan(30_000_000);
+    expect(fill.amountOut).toBeLessThan(50_000_000);
+    const fair = routePools(book.get(minty)!, routePools(book.get(PUSD)!, 2000n, false).out, true).out;
+    expect(fill.amountOut).toBeLessThan(Number(fair));
+    expect(Number(fair) / fill.amountOut).toBeLessThan(1.01);
   });
 });
 

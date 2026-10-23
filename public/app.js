@@ -15,8 +15,9 @@ const cls = (n) => (n > 0 ? "up" : n < 0 ? "down" : "");
 const time = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const ago = (ts) => {
   const m = Math.round((Date.now() - ts) / 60000);
-  return m < 1 ? "just now" : m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`;
+  return m < 1 ? "just now" : m < 60 ? `${m}m ago` : m < 60 * 36 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
 };
+const utcClock = (ts) => new Date(ts).toISOString().slice(11, 16) + " UTC";
 const get = (path) => fetch(path, { cache: "no-store" }).then((r) => r.json());
 
 let events = [];
@@ -41,16 +42,24 @@ async function loadState() {
   $("winrate").textContent = s.stats.win_rate == null ? "–" : fmt(s.stats.win_rate * 100, 0) + "%";
   $("closed").textContent = `${s.stats.wins}/${s.stats.closed} trades`;
   $("bch").textContent = fmt(s.bch_pusd);
+  const r = s.runner;
+  $("runner").textContent = r
+    ? `${r.name || "Cauldron Trader"} · ${r.cycle != null ? `cycle ${r.cycle}` : "no cycle yet"} ${r.state === "running" ? "running" : r.state === "complete" ? "done" : "waiting"} · ${r.next_run_at ? `next run ${utcClock(r.next_run_at)}` : "every 15 min"} · journal ${r.next_journal_at ? utcClock(r.next_journal_at) : "21:00 UTC"}`
+    : "One Cauldron Trader runs every role, in order, every 15 minutes.";
 
   const status = Object.fromEntries(s.agents.map((a) => [a.agent, a]));
   $("agents").innerHTML = AGENTS.map(([id, role], i) => {
     const st = status[id];
     const last = events.find((e) => e.agent === id);
+    const idle = st && /idle,\s*waiting/i.test(st.status);
+    const text = !st ? "waiting for first cycle" : idle && last ? last.message : st.status;
+    const when = st?.updated_at ? ago(st.updated_at) : "";
     return `<div class="agent" style="--c: var(--${id})">
       <b>0${i + 1} ${id.toUpperCase()}</b>
       <div class="role">${role}</div>
-      <div class="status">${esc(st ? st.status : "waiting for first cycle")}</div>
-      <div class="last">${last ? esc(last.message) : ""}</div>
+      <div class="status">${esc(text)}</div>
+      <div class="when">${esc(when)}</div>
+      <div class="last">${!idle && last ? esc(last.message) : ""}</div>
     </div>`;
   }).join("");
 
