@@ -125,6 +125,7 @@ struct StatTile: View {
 struct ModeBadge: View {
     var mode: TradingMode
     var halted: Bool
+    var frozen = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -136,6 +137,12 @@ struct ModeBadge: View {
                 Text("HALTED")
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().fill(Color.orange))
+                    .foregroundStyle(.white)
+            }
+            if frozen {
+                Text("FROZEN")
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.purple))
                     .foregroundStyle(.white)
             }
         }
@@ -188,8 +195,8 @@ struct TradeRow: View {
                 .font(.title2)
                 .foregroundStyle(trade.isBuy ? Color.up : Color.down)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(trade.side.uppercased()) \(trade.symbol)").font(.headline)
-                Text(Format.dateTime(trade.ts) + (trade.mode == .paper ? " · paper" : ""))
+                Text("\(trade.sideLabel) \(trade.symbol)").font(.headline)
+                Text(Format.dateTime(trade.ts) + (trade.mode == .paper ? " · paper" : trade.txid != nil ? " · on-chain" : ""))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()

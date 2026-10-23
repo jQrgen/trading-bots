@@ -138,3 +138,77 @@ struct GrokBotBanner: View {
         }
     }
 }
+
+/// A transaction id or address that opens in Nordic Crypto's explorer (shown as text on Apple TV, which has no browser).
+struct ExplorerLink: View {
+    var text: String
+
+    var body: some View {
+        #if os(tvOS)
+        Text(text).font(.system(.footnote, design: .monospaced)).tvFocusable()
+        #else
+        if let url = Explorer.url(text) {
+            Link(destination: url) {
+                Label {
+                    Text(text).font(.system(.footnote, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                } icon: {
+                    Image(systemName: "arrow.up.right.square")
+                }
+            }
+        } else {
+            Text(text).font(.system(.footnote, design: .monospaced))
+        }
+        #endif
+    }
+}
+
+/// The desk's own wallet, read-only: whether it's trading real money, its address and what it holds.
+struct WalletCard: View {
+    var wallet: WalletInfo
+
+    var body: some View {
+        Card(title: "Wallet") {
+            HStack(spacing: 6) {
+                Text(wallet.mode == .live ? "LIVE" : "NOT LIVE")
+                    .font(.caption.weight(.bold))
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(wallet.mode == .live ? Color.red : Color.secondary.opacity(0.3)))
+                    .foregroundStyle(wallet.mode == .live ? Color.white : Color.primary)
+                if wallet.frozen {
+                    Text("FROZEN")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.purple))
+                        .foregroundStyle(.white)
+                }
+                Spacer()
+                if let since = wallet.liveSince, wallet.mode == .live {
+                    Text("since \(Format.dateTime(since))").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if let error = wallet.error {
+                Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+            }
+            if let pusd = wallet.pusd {
+                LabeledContent("PUSD", value: Format.pusd(pusd))
+            }
+            if let bch = wallet.bch {
+                LabeledContent("BCH", value: String(format: "%.8f", bch))
+            }
+            ForEach(wallet.tokens, id: \.category) { t in
+                LabeledContent(String(t.category.prefix(8)) + "…", value: t.amount.formatted())
+            }
+            if let coins = wallet.coins {
+                LabeledContent("Coins", value: "\(coins)")
+            }
+            if let address = wallet.address {
+                ExplorerLink(text: address)
+            }
+            if wallet.mode != .live {
+                Text("Paper trading: this wallet is untouched until you press Go live on the desk.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .monospacedDigit()
+    }
+}

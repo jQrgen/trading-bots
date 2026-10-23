@@ -143,6 +143,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.closedLiquidity.count, 1)
         XCTAssertEqual(store.review(of: 11)?.process, "minor")
         XCTAssertEqual(store.markets.first?.symbol, "FURU")
+        XCTAssertNotNil(store.wallet?.address)
         XCTAssertGreaterThan(store.scorecardHistory.count, 1)
         let ticks = try? await store.service.ticks(token: "furu", days: 7)
         XCTAssertEqual(ticks?.count, 96)
@@ -202,6 +203,7 @@ final class StoreTests: XCTestCase {
             func fileHistory(path: String) async throws -> [KnowledgeVersion] { [] }
             func scorecards(days: Int) async throws -> [Scorecard] { [] }
             func briefing() async throws -> String? { nil }
+            func wallet() async throws -> WalletInfo { throw DeskError.http(status: 404, message: "not found") }
         }
         let store = DeskStore(service: Down())
         await store.refresh()
@@ -403,5 +405,92 @@ final class MarketTests: XCTestCase {
         let client = try? DeskClient(urlString: "desk.example.dev")
         XCTAssertEqual(client?.url("api/files/notes/a.md", ["history": "1"]).absoluteString, "https://desk.example.dev/api/files/notes/a.md?history=1")
         XCTAssertEqual(client?.url("api/ticks", ["token": "abc", "days": "7"]).absoluteString, "https://desk.example.dev/api/ticks?days=7&token=abc")
+    }
+}
+
+final class LiveTests: XCTestCase {
+    let decoder = DeskDecoder.make()
+
+    func testLiveStateCountsDepositsAsCapital() throws {
+        let json = #"{"mode":"live","halted":false,"frozen":true,"live_since":1761220800000,"start_pusd":250.0,"deposits_pusd":200.17,"total_pusd":248.98,"holdings":[],"positions":[],"agents":[],"stats":{"closed":0,"wins":0,"win_rate":null,"realized_pusd":0,"change_24h_pusd":-0.94}}"#
+        let s = try decoder.decode(DeskState.self, from: Data(json.utf8))
+        XCTAssertEqual(s.mode, .live)
+        XCTAssertTrue(s.frozen)
+        XCTAssertEqual(s.depositsPusd, 200.17)
+        XCTAssertNotNil(s.liveSince)
+        XCTAssertTrue(s.stats.hasChange24h)
+        XCTAssertEqual(s.stats.change24hPusd, -0.94)
+        XCTAssertEqual(s.pnlAllPusd!, -1.02, accuracy: 0.0001)
+
+        let none = #"{"mode":"live","stats":{"closed":0,"wins":0,"change_24h_pusd":null}}"#
+        let n = try decoder.decode(DeskState.self, from: Data(none.utf8))
+        XCTAssertTrue(n.stats.hasChange24h, "null means no snapshot yet, not an old desk")
+        XCTAssertNil(n.stats.change24hPusd)
+
+        let old = #"{"mode":"paper","stats":{"closed":1,"wins":1}}"#
+        XCTAssertFalse(try decoder.decode(DeskState.self, from: Data(old.utf8)).stats.hasChange24h)
+    }
+
+    @MainActor
+    func testDayChangePrefersTheDesksNetFigure() async {
+        struct Live: DeskService {
+            let base = DemoDesk()
+            func state() async throws -> DeskState {
+                var s = try await base.state()
+                s.mode = .live
+                s.stats.change24hPusd = -0.94
+                s.stats.hasChange24h = true
+                return s
+            }
+            func events(after: Int, limit: Int) async throws -> [DeskEvent] { [] }
+            func snapshots(days: Int) async throws -> [Snapshot] { try await base.snapshots(days: days) }
+            func trades() async throws -> [Trade] { [] }
+            func positions() async throws -> [Position] { [] }
+            func journal() async throws -> [JournalEntry] { [] }
+            func lessons() async throws -> [Lesson] { [] }
+            func team() async throws -> TeamRoster { try await base.team() }
+            func knowledge() async throws -> [KnowledgeEntry] { [] }
+            func knowledgeHistory(key: String) async throws -> [KnowledgeVersion] { [] }
+            func scorecard() async throws -> Scorecard? { nil }
+            func proposals(limit: Int) async throws -> [Proposal] { [] }
+            func agentCalls(agent: String?, limit: Int) async throws -> [AgentCall] { [] }
+            func agentCall(id: Int) async throws -> AgentCall { throw DeskError.http(status: 404, message: nil) }
+            func tokens() async throws -> [TokenSeen] { [] }
+            func research(token: String?) async throws -> [ResearchNote] { [] }
+            func sentiment(subject: String?) async throws -> [SentimentReading] { [] }
+            func launchpad() async throws -> [LaunchpadSale] { [] }
+            func files() async throws -> [BotFile] { [] }
+            func file(path: String) async throws -> BotFile { throw DeskError.http(status: 404, message: nil) }
+            func liquidity() async throws -> [LiquidityPosition] { [] }
+            func reviews() async throws -> [TradeReview] { [] }
+            func markets() async throws -> [MarketTick] { [] }
+            func ticks(token: String, days: Int) async throws -> [MarketTick] { [] }
+            func fileHistory(path: String) async throws -> [KnowledgeVersion] { [] }
+            func scorecards(days: Int) async throws -> [Scorecard] { [] }
+            func briefing() async throws -> String? { nil }
+            func wallet() async throws -> WalletInfo { WalletInfo(mode: .live, pusd: 248.9) }
+        }
+        let store = DeskStore(service: Live())
+        await store.refresh()
+        XCTAssertEqual(store.dayChange, -0.94)
+        XCTAssertEqual(store.wallet?.pusd, 248.9)
+    }
+
+    func testWalletAndTxid() throws {
+        let w = #"{"mode":"live","frozen":false,"has_secret":true,"live_since":1761220800000,"address":"bitcoincash:qabc","token_address":"bitcoincash:zabc","bch_sats":150000,"pusd":248.9,"tokens":[{"category":"ff00","amount":5}],"coins":3}"#
+        let wallet = try decoder.decode(WalletInfo.self, from: Data(w.utf8))
+        XCTAssertEqual(wallet.mode, .live)
+        XCTAssertEqual(wallet.bch, 0.0015)
+        XCTAssertEqual(wallet.tokens.first?.category, "ff00")
+        XCTAssertEqual(wallet.coins, 3)
+
+        let noSeed = #"{"mode":"paper","frozen":false,"has_secret":false,"live_since":null,"address":null}"#
+        XCTAssertFalse(try decoder.decode(WalletInfo.self, from: Data(noSeed.utf8)).hasSecret)
+
+        let t = #"{"id":9,"ts":1761220800000,"mode":"live","side":"convert","token_id":"pusd","symbol":"PUSD","pusd":200.17,"txid":"abc123"}"#
+        let trade = try decoder.decode(Trade.self, from: Data(t.utf8))
+        XCTAssertEqual(trade.sideLabel, "CONVERT")
+        XCTAssertEqual(trade.txid, "abc123")
+        XCTAssertEqual(Explorer.url("abc123")?.absoluteString, "https://explorer.nordiccrypto.no/search/?q=abc123&chain=bch")
     }
 }

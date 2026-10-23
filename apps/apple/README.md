@@ -4,7 +4,7 @@ A native SwiftUI app that shows what the bot team is doing. It is **read-only**:
 
 | Screen | What it shows |
 |---|---|
-| Desk | Total value in PUSD, P&L since start and over 24h, win rate, balance chart (24h to 90d), holdings, open positions, agent tiles, latest activity |
+| Desk | LIVE/PAPER and FROZEN badges, total value in PUSD, P&L since start (or since going live, with deposits counted as capital) and over 24h net of deposits, the wallet (address with an explorer link, PUSD and BCH balances), win rate, balance chart (24h to 90d), holdings, open positions, agent tiles, latest activity |
 | Agents | Reporting structure, each agent's live status, role document, tools, its own activity log and its exact Grok prompts and replies |
 | Activity | Every event the bots log (scan, signal, proposal, risk pass/fail, decision, fill, journal…), filterable by agent, with the raw data |
 | Trades | Trade ideas (with bull and bear case, risk check and decision), fills, open and closed positions (with Zara's review), and paper liquidity positions (deposit, estimated fees, impermanent loss) |
@@ -75,6 +75,7 @@ The app reads these endpoints from `src/index.ts` (snake_case JSON, epoch-millis
 | `GET /api/sentiment?subject=token\|cauldron\|bch` | Mood on X, score -1 to +1 |
 | `GET /api/launchpad` | Launchpad sales (`data` is a JSON string) |
 | `GET /api/files`, `/api/files/<path>` | The agents' shared notes; the text only on the single-file call |
+| `GET /api/wallet` | The desk's own wallet: live or not, frozen, address and balances (read-only) |
 | `GET /api/liquidity` | Paper liquidity positions, open first |
 | `GET /api/markets`, `/api/ticks?token=&days=` | Latest tick per token; one token's price series (oldest first) |
 | `GET /api/briefing` | The JSON Grok Bot read at its latest briefing (or `null`) |

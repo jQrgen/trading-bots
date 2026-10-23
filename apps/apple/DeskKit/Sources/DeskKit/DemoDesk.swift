@@ -347,4 +347,9 @@ public struct DemoDesk: DeskService {
     public func briefing() async throws -> String? {
         PrettyJSON.format(Data(#"{"cycle":412,"mode":"paper","signals":[{"symbol":"FURU","kind":"volume-spike","ratio":3.2}],"open_positions":2}"#.utf8))
     }
+
+    public func wallet() async throws -> WalletInfo {
+        WalletInfo(mode: .paper, hasSecret: true, address: "bitcoincash:qdemo0wallet0address0for0the0app0preview0only",
+                   bchSats: 2_400_000, pusd: 0, coins: 2)
+    }
 }

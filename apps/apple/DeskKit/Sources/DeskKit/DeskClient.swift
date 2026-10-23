@@ -45,6 +45,8 @@ public protocol DeskService: Sendable {
     func scorecards(days: Int) async throws -> [Scorecard]
     /// The JSON Grok Bot read at its latest briefing, pretty-printed, or nil before the first one.
     func briefing() async throws -> String?
+    /// The desk's own wallet: mode, address and balances.
+    func wallet() async throws -> WalletInfo
 }
 
 public enum DeskError: LocalizedError, Equatable {
@@ -157,6 +159,7 @@ public struct DeskClient: DeskService {
     public func liquidity() async throws -> [LiquidityPosition] { try await list("api/liquidity") }
     public func reviews() async throws -> [TradeReview] { try await list("api/reviews") }
     public func markets() async throws -> [MarketTick] { try await list("api/markets") }
+    public func wallet() async throws -> WalletInfo { try await get("api/wallet") }
 
     public func ticks(token: String, days: Int) async throws -> [MarketTick] {
         try await list("api/ticks", ["token": token, "days": "\(days)"])

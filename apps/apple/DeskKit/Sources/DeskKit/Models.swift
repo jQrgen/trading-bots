@@ -29,18 +29,30 @@ public struct DeskState: Decodable, Sendable {
     public var grokBot: GrokBotStatus?
     /// The single routine that plays every role. Absent on older desks.
     public var runner: RunnerStatus?
+    /// The owner's kill switch: no on-chain transactions at all while set.
+    public var frozen: Bool
+    public var liveSince: Date?
+    /// Owner's net deposits since going live. They count as capital, not profit, and start_pusd includes them.
+    public var depositsPusd: Double
 
     public struct Stats: Decodable, Sendable {
         public var closed: Int
         public var wins: Int
         public var winRate: Double?
         public var realizedPusd: Double?
+        /// Change in value over 24h net of deposits and withdrawals. Nil until there's a snapshot to compare with.
+        public var change24hPusd: Double?
+        /// False on desks that don't send change_24h_pusd yet; the app then works it out from snapshots.
+        public var hasChange24h: Bool
 
-        public init(closed: Int = 0, wins: Int = 0, winRate: Double? = nil, realizedPusd: Double? = nil) {
+        public init(closed: Int = 0, wins: Int = 0, winRate: Double? = nil, realizedPusd: Double? = nil,
+                    change24hPusd: Double? = nil, hasChange24h: Bool = false) {
             self.closed = closed
             self.wins = wins
             self.winRate = winRate
             self.realizedPusd = realizedPusd
+            self.change24hPusd = change24hPusd
+            self.hasChange24h = hasChange24h || change24hPusd != nil
         }
 
         public init(from decoder: Decoder) throws {
@@ -49,14 +61,18 @@ public struct DeskState: Decodable, Sendable {
             wins = (try? c.decodeIfPresent(Int.self, forKey: .wins)) ?? 0
             winRate = try? c.decodeIfPresent(Double.self, forKey: .winRate)
             realizedPusd = try? c.decodeIfPresent(Double.self, forKey: .realizedPusd)
+            // convertFromSnakeCase spells "change_24h_pusd" as "change24HPusd".
+            let key: CodingKeys = c.contains(.change24HPusd) ? .change24HPusd : .change24hPusd
+            hasChange24h = c.contains(key)
+            change24hPusd = try? c.decodeIfPresent(Double.self, forKey: key)
         }
 
-        enum CodingKeys: String, CodingKey { case closed, wins, winRate, realizedPusd }
+        enum CodingKeys: String, CodingKey { case closed, wins, winRate, realizedPusd, change24HPusd, change24hPusd }
     }
 
     public init(mode: TradingMode, halted: Bool, startPusd: Double?, totalPusd: Double?, updatedAt: Date?, bchPusd: Double?,
                 holdings: [Holding], positions: [Position], agents: [AgentStatus], stats: Stats, grokBot: GrokBotStatus? = nil,
-                runner: RunnerStatus? = nil) {
+                runner: RunnerStatus? = nil, frozen: Bool = false, liveSince: Date? = nil, depositsPusd: Double = 0) {
         self.mode = mode
         self.halted = halted
         self.startPusd = startPusd
@@ -69,6 +85,9 @@ public struct DeskState: Decodable, Sendable {
         self.stats = stats
         self.grokBot = grokBot
         self.runner = runner
+        self.frozen = frozen
+        self.liveSince = liveSince
+        self.depositsPusd = depositsPusd
     }
 
     public init(from decoder: Decoder) throws {
@@ -85,10 +104,13 @@ public struct DeskState: Decodable, Sendable {
         stats = (try? c.decodeIfPresent(Stats.self, forKey: .stats)) ?? Stats()
         grokBot = try? c.decodeIfPresent(GrokBotStatus.self, forKey: .grokBot)
         runner = try? c.decodeIfPresent(RunnerStatus.self, forKey: .runner)
+        frozen = (try? c.decodeIfPresent(FlexBool.self, forKey: .frozen))?.value ?? false
+        liveSince = try? c.decodeIfPresent(Date.self, forKey: .liveSince)
+        depositsPusd = (try? c.decodeIfPresent(Double.self, forKey: .depositsPusd)) ?? 0
     }
 
     enum CodingKeys: String, CodingKey {
-        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats, grokBot, runner
+        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats, grokBot, runner, frozen, liveSince, depositsPusd
     }
 
     /// Profit since the paper (or live) start balance.
@@ -336,10 +358,12 @@ public struct Trade: Decodable, Identifiable, Hashable, Sendable {
     public var estimated: Bool
     public var positionId: Int?
     public var reason: String?
+    /// On-chain transaction id, for live fills.
+    public var txid: String?
 
     public init(id: Int, ts: Date, cycle: Int? = nil, mode: TradingMode, side: String, tokenId: String, symbol: String,
                 amount: Double?, pusd: Double, pricePusd: Double?, impactPct: Double?, estimated: Bool,
-                positionId: Int?, reason: String?) {
+                positionId: Int?, reason: String?, txid: String? = nil) {
         self.id = id
         self.ts = ts
         self.cycle = cycle
@@ -354,6 +378,7 @@ public struct Trade: Decodable, Identifiable, Hashable, Sendable {
         self.estimated = estimated
         self.positionId = positionId
         self.reason = reason
+        self.txid = txid
     }
 
     public init(from decoder: Decoder) throws {
@@ -372,14 +397,24 @@ public struct Trade: Decodable, Identifiable, Hashable, Sendable {
         estimated = (try? c.decodeIfPresent(FlexBool.self, forKey: .estimated))?.value ?? false
         positionId = try? c.decodeIfPresent(Int.self, forKey: .positionId)
         reason = try? c.decodeIfPresent(String.self, forKey: .reason)
+        txid = try? c.decodeIfPresent(String.self, forKey: .txid)
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, ts, cycle, mode, side, tokenId, symbol, amount, pusd, pricePusd, impactPct, estimated, positionId, reason
+        case id, ts, cycle, mode, side, tokenId, symbol, amount, pusd, pricePusd, impactPct, estimated, positionId, reason, txid
     }
 
     /// Buying a token or putting liquidity into a pool.
     public var isBuy: Bool { side == "buy" || side == "lp-in" }
+
+    /// BUY, SELL, ADD LIQ, WITHDRAW or CONVERT (a BCH top-up swapped to PUSD).
+    public var sideLabel: String {
+        switch side {
+        case "lp-in": "ADD LIQ"
+        case "lp-out": "WITHDRAW"
+        default: side.uppercased()
+        }
+    }
 }
 
 /// GET /api/snapshots?days=N — balance history, oldest first.

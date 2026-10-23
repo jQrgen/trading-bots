@@ -15,6 +15,9 @@ struct OverviewView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: Metrics.cardMinWidth), spacing: Metrics.spacing, alignment: .top)],
                           spacing: Metrics.spacing) {
                     holdings
+                    if let wallet = store.wallet, wallet.hasSecret {
+                        WalletCard(wallet: wallet)
+                    }
                     openPositions
                 }
                 agents
@@ -29,7 +32,7 @@ struct OverviewView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                ModeBadge(mode: store.state?.mode ?? .paper, halted: store.state?.halted ?? false)
+                ModeBadge(mode: store.state?.mode ?? .paper, halted: store.state?.halted ?? false, frozen: store.state?.frozen ?? false)
                 Spacer()
                 RefreshFooter().fixedSize()
             }
@@ -42,9 +45,14 @@ struct OverviewView: View {
                 Text("PUSD").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
             }
             if let pnl = store.state?.pnlAllPusd {
-                Text("\(Format.signed(pnl)) PUSD (\(Format.signedPct(store.state?.pnlAllPct))) since start")
+                Text("\(Format.signed(pnl)) PUSD (\(Format.signedPct(store.state?.pnlAllPct))) since \(store.isLive ? "going live" : "start")")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(Color.pnl(pnl))
+            }
+            if let deposits = store.state?.depositsPusd, deposits != 0 {
+                Text(deposits > 0 ? "\(Format.pusd(deposits)) PUSD deposited, not counted as profit" : "\(Format.pusd(-deposits)) PUSD withdrawn, not counted as loss")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .tvFocusable()
@@ -52,7 +60,7 @@ struct OverviewView: View {
 
     private var tiles: some View {
         let stats = store.state?.stats
-        let day = store.change(overHours: 24)
+        let day = store.dayChange
         return LazyVGrid(columns: [GridItem(.adaptive(minimum: Metrics.tileMinWidth), spacing: Metrics.spacing)], spacing: Metrics.spacing) {
             StatTile(title: "24h", value: Format.signed(day), detail: "PUSD", tint: Color.pnl(day))
             StatTile(title: "Realised", value: Format.signed(stats?.realizedPusd), detail: "PUSD", tint: Color.pnl(stats?.realizedPusd))
