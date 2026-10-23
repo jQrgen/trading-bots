@@ -5,7 +5,9 @@ import { botKey, checkBotToken, handleBot } from "./bot";
 import GROK_BOT from "../GROK_BOT.md";
 import { loadKnowledge, parseRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
 import { describeRoles } from "./roles";
-import { goLive, goPaper, modeOf, setFrozen, walletInfo } from "./live";
+import { dryRunSwap, goLive, goPaper, modeOf, setFrozen, walletInfo } from "./live";
+import { Ledger } from "./ledger";
+import { PUSD } from "./config";
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
@@ -165,6 +167,15 @@ async function admin(req: Request, env: Env, ctx: ExecutionContext, p: string) {
     if (converted) await recordConversion(env, converted);
     if (r.ok) ctx.waitUntil(runCycle(env));
     return json({ ...r, converted }, r.ok ? 200 : 400);
+  }
+  if (p === "/api/admin/dry-swap") {
+    // Build, check and sign a swap without broadcasting it, and report what the network knows about each input.
+    configureEndpoints(env);
+    const RISK = parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}");
+    const sell = typeof body.sell === "string" ? body.sell : "bch";
+    const buy = typeof body.buy === "string" ? body.buy : PUSD;
+    const amount = BigInt(Math.max(1, Math.floor(Number(body.amount) || 100000)));
+    return json(await dryRunSwap(env, new Ledger(env, 0), RISK, { sell, buy, amount }), 200);
   }
   if (p === "/api/admin/paper") {
     const r = await goPaper(env);
