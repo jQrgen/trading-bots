@@ -104,7 +104,8 @@ struct SentimentRow: View {
     }
 
     private var caption: String {
-        [reading.mentions.map { "\($0) posts" }, Format.relative(reading.ts)].compactMap { $0 }.joined(separator: " · ")
+        let fields: [String?] = [reading.mentions.map { "\($0) posts" }, Format.relative(reading.ts)]
+        return fields.compactMap { $0 }.joined(separator: " · ")
     }
 }
 
@@ -146,7 +147,8 @@ struct TokenRow: View {
     }
 
     private var detail: String {
-        var parts = [token.name, token.source.capitalized, "seen " + Format.relative(token.firstSeen)].compactMap { $0 }
+        let fields: [String?] = [token.name, token.source.capitalized, "seen " + Format.relative(token.firstSeen)]
+        var parts = fields.compactMap { $0 }
         if let tvl = token.lastTvlBch { parts.append(String(format: "%.1f BCH TVL", tvl)) }
         return parts.joined(separator: " · ")
     }
