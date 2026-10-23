@@ -498,6 +498,8 @@ async function loadWallet() {
   const live = w.mode === "live";
   ctl.querySelector('[data-act="live"]').hidden = live || !w.address;
   ctl.querySelector('[data-act="paper"]').hidden = !live;
+  // Only worth a swap when there is spare BCH above the fee reserve (0.002 BCH) plus 0.001 BCH.
+  ctl.querySelector('[data-act="convert"]').hidden = !live || !(w.bch_sats > 300_000);
   ctl.querySelector('[data-act="halt"]').textContent = deskState?.halted ? "Resume buys" : "Halt buys";
   ctl.querySelector('[data-act="freeze"]').textContent = w.frozen ? "Unfreeze wallet" : "Freeze wallet";
 }
@@ -523,6 +525,14 @@ $("walletctl").addEventListener("click", async (e) => {
     r = await post("/api/admin/live", { confirm: "GO LIVE" });
     if (btn) { btn.disabled = false; btn.textContent = label; }
     if (r.ok) alert(r.converted ? `Live. Converted ${r.converted.bch} BCH to ${r.converted.pusd} PUSD (tx ${r.converted.txid}).` : "Live.");
+  }
+  if (act === "convert") {
+    if (!confirm("Swap all BCH above the fee reserve to PUSD now? This is a real on-chain trade.")) return;
+    const btn = e.target.closest("button");
+    btn.disabled = true; btn.textContent = "Converting…";
+    r = await post("/api/admin/convert");
+    btn.disabled = false; btn.textContent = "Convert BCH to PUSD";
+    if (r.ok) alert(r.converted ? `Converted ${r.converted.bch} BCH to ${r.converted.pusd} PUSD (tx ${r.converted.txid}).` : "Nothing to convert: no BCH above the fee reserve.");
   }
   if (act === "paper") {
     if (!confirm("Switch back to paper trading? Only possible with no live positions open. The wallet keeps its funds.")) return;

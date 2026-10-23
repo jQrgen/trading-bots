@@ -739,8 +739,8 @@ export async function convertBchToPusd(env: Env, RISK: RiskLimits) {
 }
 
 /** Record the go-live conversion once the desk is live, so it shows as a live trade with its transaction. */
-export async function recordConversion(env: Env, c: NonNullable<Awaited<ReturnType<typeof convertBchToPusd>>>) {
+export async function recordConversion(env: Env, c: NonNullable<Awaited<ReturnType<typeof convertBchToPusd>>>, why = "Go live: all BCH above the fee reserve swapped to PUSD (owner's rule)") {
   const L = new Ledger(env, c.cycle);
-  await L.recordTrade({ side: "convert", token_id: "bch", symbol: "BCH", amount: Math.round(c.bch * 1e8), pusd: c.pusd, price_pusd: c.pusd / c.bch, impact_pct: c.impactPct, estimated: false, position_id: null, reason: "Go live: all BCH above the fee reserve swapped to PUSD (owner's rule)", txid: c.txid });
-  await L.log("rune", "fill", `LIVE CONVERT ${round(c.bch, 5)} BCH to ${round(c.pusd)} PUSD before trading starts, tx ${explorerTx(c.txid)}.`, c);
+  await L.recordTrade({ side: "convert", token_id: "bch", symbol: "BCH", amount: Math.round(c.bch * 1e8), pusd: c.pusd, price_pusd: c.pusd / c.bch, impact_pct: c.impactPct, estimated: false, position_id: null, reason: why, txid: c.txid });
+  await L.log("rune", "fill", `LIVE CONVERT ${round(c.bch, 5)} BCH to ${round(c.pusd)} PUSD (${why}), tx ${explorerTx(c.txid)}.`, c);
 }
