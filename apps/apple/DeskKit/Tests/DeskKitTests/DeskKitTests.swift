@@ -55,6 +55,11 @@ final class DecodingTests: XCTestCase {
         let event = DeskEvent(id: 9, ts: Date(timeIntervalSince1970: 1_761_220_800), cycle: 27, agent: "orin", kind: "scan", message: "Scanned 40 tokens, 8 signals")
         let idle = AgentCard(member: member, status: "idle, waiting for Grok Bot", updatedAt: nil, lastEvent: event)
         XCTAssertEqual(idle.displayStatus, "Cycle 27: Scanned 40 tokens, 8 signals")
+        XCTAssertNil(idle.latestNote, "an idle line is replaced by the event, so the note would repeat it")
+        let busy = AgentCard(member: member, status: "Cycle 27: scanned · next 16:20 UTC", updatedAt: nil, lastEvent: event)
+        XCTAssertEqual(busy.latestNote, "Scanned 40 tokens, 8 signals")
+        let running = AgentCard(member: member, status: "x", updatedAt: nil, lastEvent: event, isRunning: true)
+        XCTAssertNil(running.latestNote)
         let live = AgentCard(member: member, status: "Cycle 27: 8 signals · next 16:20 UTC", updatedAt: nil, lastEvent: event)
         XCTAssertEqual(live.displayStatus, "Cycle 27: 8 signals · next 16:20 UTC")
     }

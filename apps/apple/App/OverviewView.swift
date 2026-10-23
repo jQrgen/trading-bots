@@ -109,7 +109,7 @@ struct OverviewView: View {
     private var agents: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Agents").font(.headline).foregroundStyle(.secondary)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: Metrics.tileMinWidth * 1.4), spacing: Metrics.spacing)], spacing: Metrics.spacing) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: Metrics.agentTileMinWidth), spacing: Metrics.spacing, alignment: .top)], alignment: .leading, spacing: Metrics.spacing) {
                 ForEach(store.agentCards) { card in
                     NavigationLink(value: card.member) {
                         AgentTile(card: card)
@@ -135,43 +135,57 @@ struct OverviewView: View {
 struct AgentTile: View {
     var card: AgentCard
 
+    private var tint: Color { Color.agent(card.id) }
+
+    /// Matches the web desk's agent card: number and name in the role's colour, a coloured top bar,
+    /// the latest status, how long ago it was posted, and the role's latest note.
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            ZStack(alignment: .bottomTrailing) {
-                AgentAvatar(id: card.id, size: 36)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(String(format: "%02d", card.member.number) + "  " + card.member.name.uppercased())
+                    .font(.system(.headline, design: .monospaced).weight(.bold))
+                    .tracking(2)
+                    .foregroundStyle(tint)
+                Spacer()
                 if card.isRunning {
-                    Circle().fill(Color.up).frame(width: 10, height: 10)
-                        .overlay(Circle().stroke(Color.agent(card.id).opacity(0.12), lineWidth: 2))
+                    HStack(spacing: 4) {
+                        Circle().fill(Color.up).frame(width: 8, height: 8)
+                        Text("Running").font(.caption2.weight(.bold))
+                    }
+                    .foregroundStyle(Color.up)
                 }
             }
-            VStack(alignment: .leading, spacing: 3) {
-                HStack {
-                    Text(card.member.name).font(.headline)
-                    Spacer()
-                    if card.isRunning {
-                        Text("Running").font(.caption2.weight(.bold)).foregroundStyle(Color.up)
-                    } else if let at = card.updatedAt {
-                        Text(Format.relative(at)).font(.caption2).foregroundStyle(.secondary)
-                    }
-                }
-                Text(card.member.role).font(.caption).foregroundStyle(.secondary)
-                if card.isRunning {
-                    Text(card.runningDetail)
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(Color.up)
-                        .lineLimit(2)
-                } else {
-                    Text(card.displayStatus)
-                        .font(.callout)
-                        .lineLimit(4)
-                        .foregroundStyle(card.status == nil && card.lastEvent == nil ? .secondary : .primary)
-                }
+            Text(card.member.role).font(.subheadline).foregroundStyle(.secondary)
+            if card.isRunning {
+                Text(card.runningDetail)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color.up)
+                    .lineLimit(2)
+            } else {
+                Text(card.displayStatus)
+                    .font(.callout)
+                    .lineLimit(6)
+                    .foregroundStyle(card.status == nil && card.lastEvent == nil ? .secondary : .primary)
+            }
+            if let at = card.isRunning ? card.activeSince : card.updatedAt {
+                Text(card.isRunning ? "started \(Format.relative(at))" : Format.relative(at))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let note = card.latestNote {
+                Text(note).font(.callout).foregroundStyle(.secondary).lineLimit(3)
             }
         }
         .padding(Metrics.padding * 0.75)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.agent(card.id).opacity(card.isRunning ? 0.22 : 0.12)))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.agent(card.id).opacity(card.isRunning ? 0.9 : 0), lineWidth: 1.5))
+        .padding(.top, 4)
+        .frame(maxWidth: .infinity, minHeight: 0, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(tint.opacity(card.isRunning ? 0.18 : 0.08)))
+        .overlay(alignment: .top) {
+            UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14, style: .continuous)
+                .fill(tint)
+                .frame(height: 4)
+        }
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(tint.opacity(card.isRunning ? 0.9 : 0.25), lineWidth: card.isRunning ? 1.5 : 1))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .contentShape(Rectangle())
     }
 }

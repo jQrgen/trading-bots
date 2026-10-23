@@ -112,6 +112,14 @@ public struct AgentCard: Identifiable, Hashable, Sendable {
         return [head, since].compactMap { $0 }.joined(separator: " · ")
     }
 
+    /// The role's latest event, shown under the status like the web desk's card. Nil when it would repeat the status.
+    public var latestNote: String? {
+        guard !isRunning, let lastEvent else { return nil }
+        if let status, status.range(of: "idle, waiting", options: .caseInsensitive) != nil { return nil }
+        if status == nil { return nil }
+        return lastEvent.message
+    }
+
     /// Hide the old "idle, waiting for Grok Bot" line. The latest event is what that role last concluded.
     public var displayStatus: String {
         if isRunning { return "Running · " + runningDetail }

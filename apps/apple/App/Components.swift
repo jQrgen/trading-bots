@@ -8,6 +8,7 @@ enum Metrics {
     static let spacing: CGFloat = 40
     static let padding: CGFloat = 32
     static let tileMinWidth: CGFloat = 340
+    static let agentTileMinWidth: CGFloat = 420
     static let cardMinWidth: CGFloat = 560
     static let chartHeight: CGFloat = 380
     static let heroFont: Font = .system(size: 96, weight: .bold, design: .rounded)
@@ -15,6 +16,8 @@ enum Metrics {
     static let spacing: CGFloat = 16
     static let padding: CGFloat = 16
     static let tileMinWidth: CGFloat = 150
+    /// Two agent cards across on iPhone, like the web desk.
+    static let agentTileMinWidth: CGFloat = 160
     static let cardMinWidth: CGFloat = 320
     static let chartHeight: CGFloat = 220
     static let heroFont: Font = .system(size: 44, weight: .bold, design: .rounded)
