@@ -412,11 +412,12 @@ final class LiveTests: XCTestCase {
     let decoder = DeskDecoder.make()
 
     func testLiveStateCountsDepositsAsCapital() throws {
-        let json = #"{"mode":"live","halted":false,"frozen":true,"live_since":1761220800000,"start_pusd":250.0,"deposits_pusd":200.17,"total_pusd":248.98,"holdings":[],"positions":[],"agents":[],"stats":{"closed":0,"wins":0,"win_rate":null,"realized_pusd":0,"change_24h_pusd":-0.94}}"#
+        let json = #"{"mode":"live","halted":false,"frozen":true,"live_since":1761220800000,"start_pusd":250.0,"deposits_pusd":200.17,"total_deposited_pusd":249.9,"total_pusd":248.98,"holdings":[],"positions":[],"agents":[],"stats":{"closed":0,"wins":0,"win_rate":null,"realized_pusd":0,"change_24h_pusd":-0.94}}"#
         let s = try decoder.decode(DeskState.self, from: Data(json.utf8))
         XCTAssertEqual(s.mode, .live)
         XCTAssertTrue(s.frozen)
         XCTAssertEqual(s.depositsPusd, 200.17)
+        XCTAssertEqual(s.totalDepositedPusd, 249.9)
         XCTAssertNotNil(s.liveSince)
         XCTAssertTrue(s.stats.hasChange24h)
         XCTAssertEqual(s.stats.change24hPusd, -0.94)

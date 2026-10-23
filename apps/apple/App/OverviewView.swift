@@ -49,7 +49,11 @@ struct OverviewView: View {
                     .font(.callout.weight(.medium))
                     .foregroundStyle(Color.pnl(pnl))
             }
-            if let deposits = store.state?.depositsPusd, deposits != 0 {
+            if let total = store.state?.totalDepositedPusd, store.isLive {
+                Text("\(Format.pusd(total)) PUSD deposited in total, not counted as profit")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let deposits = store.state?.depositsPusd, deposits != 0 {
                 Text(deposits > 0 ? "\(Format.pusd(deposits)) PUSD deposited, not counted as profit" : "\(Format.pusd(-deposits)) PUSD withdrawn, not counted as loss")
                     .font(.caption)
                     .foregroundStyle(.secondary)

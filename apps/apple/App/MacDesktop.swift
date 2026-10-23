@@ -68,6 +68,9 @@ struct MenuBarPanel: View {
                 stat("Since start", Format.signed(store.state?.pnlAllPusd), Color.pnl(store.state?.pnlAllPusd))
                 stat("Win rate", Format.ratio(store.state?.stats.winRate), .primary)
             }
+            if let total = store.state?.totalDepositedPusd, store.isLive {
+                Text("\(Format.pusd(total)) PUSD deposited in total").font(.caption).foregroundStyle(.secondary)
+            }
             Divider()
             ForEach(store.events.prefix(5)) { e in
                 HStack(alignment: .top, spacing: 8) {

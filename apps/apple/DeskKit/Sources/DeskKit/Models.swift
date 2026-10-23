@@ -34,6 +34,8 @@ public struct DeskState: Decodable, Sendable {
     public var liveSince: Date?
     /// Owner's net deposits since going live. They count as capital, not profit, and start_pusd includes them.
     public var depositsPusd: Double
+    /// Everything the owner has put in: the funding at Go live plus top-ups minus withdrawals. P&L is measured against it.
+    public var totalDepositedPusd: Double?
 
     public struct Stats: Decodable, Sendable {
         public var closed: Int
@@ -72,7 +74,8 @@ public struct DeskState: Decodable, Sendable {
 
     public init(mode: TradingMode, halted: Bool, startPusd: Double?, totalPusd: Double?, updatedAt: Date?, bchPusd: Double?,
                 holdings: [Holding], positions: [Position], agents: [AgentStatus], stats: Stats, grokBot: GrokBotStatus? = nil,
-                runner: RunnerStatus? = nil, frozen: Bool = false, liveSince: Date? = nil, depositsPusd: Double = 0) {
+                runner: RunnerStatus? = nil, frozen: Bool = false, liveSince: Date? = nil, depositsPusd: Double = 0,
+                totalDepositedPusd: Double? = nil) {
         self.mode = mode
         self.halted = halted
         self.startPusd = startPusd
@@ -88,6 +91,7 @@ public struct DeskState: Decodable, Sendable {
         self.frozen = frozen
         self.liveSince = liveSince
         self.depositsPusd = depositsPusd
+        self.totalDepositedPusd = totalDepositedPusd
     }
 
     public init(from decoder: Decoder) throws {
@@ -107,10 +111,11 @@ public struct DeskState: Decodable, Sendable {
         frozen = (try? c.decodeIfPresent(FlexBool.self, forKey: .frozen))?.value ?? false
         liveSince = try? c.decodeIfPresent(Date.self, forKey: .liveSince)
         depositsPusd = (try? c.decodeIfPresent(Double.self, forKey: .depositsPusd)) ?? 0
+        totalDepositedPusd = try? c.decodeIfPresent(Double.self, forKey: .totalDepositedPusd)
     }
 
     enum CodingKeys: String, CodingKey {
-        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats, grokBot, runner, frozen, liveSince, depositsPusd
+        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats, grokBot, runner, frozen, liveSince, depositsPusd, totalDepositedPusd
     }
 
     /// Profit since the paper (or live) start balance.
