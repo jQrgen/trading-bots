@@ -168,6 +168,19 @@ async function admin(req: Request, env: Env, ctx: ExecutionContext, p: string) {
     if (r.ok) ctx.waitUntil(runCycle(env));
     return json({ ...r, converted }, r.ok ? 200 : 400);
   }
+  if (p === "/api/admin/convert") {
+    // Owner's rule: the book is held in PUSD, so BCH sent to the wallet (above the fee reserve) is swapped to PUSD.
+    const RISK = parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}");
+    if ((await modeOf(env)) !== "live") return json({ ok: false, error: "Only in live mode; Go live converts BCH itself." }, 400);
+    try {
+      configureEndpoints(env);
+      const converted = await convertBchToPusd(env, RISK);
+      if (converted) await recordConversion(env, converted, "Owner topped up with BCH: everything above the fee reserve swapped to PUSD");
+      return json({ ok: true, converted });
+    } catch (e) {
+      return json({ ok: false, error: `Converting BCH to PUSD failed, nothing was sent. ${(e as Error).message}` }, 400);
+    }
+  }
   if (p === "/api/admin/dry-swap") {
     // Build, check and sign a swap without broadcasting it, and report what the network knows about each input.
     configureEndpoints(env);
