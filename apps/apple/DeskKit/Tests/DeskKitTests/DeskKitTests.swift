@@ -191,7 +191,7 @@ final class KnowledgeTests: XCTestCase {
     let decoder = DeskDecoder.make()
 
     func testKnowledgeAndScorecard() throws {
-        let k = #"[{"key":"role:kade","title":"Kade","kind":"role","format":"markdown","body":"# Kade","version":2,"updated_by":"owner","updated_at":1761220800000},{"key":"risk-limits","title":"Risk","kind":"risk","format":"json","body":"{}","version":1,"updated_by":"seed","updated_at":1761220800000}]"#
+        let k = ##"[{"key":"role:kade","title":"Kade","kind":"role","format":"markdown","body":"# Kade","version":2,"updated_by":"owner","updated_at":1761220800000},{"key":"risk-limits","title":"Risk","kind":"risk","format":"json","body":"{}","version":1,"updated_by":"seed","updated_at":1761220800000}]"##
         let entries = try decoder.decode(LossyArray<KnowledgeEntry>.self, from: Data(k.utf8)).items
         XCTAssertEqual(entries.map(\.roleAgent), ["kade", nil])
         XCTAssertEqual(entries[1].isJSON, true)
