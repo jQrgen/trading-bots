@@ -530,9 +530,19 @@ $("walletctl").addEventListener("click", async (e) => {
     if (!confirm("Swap all BCH above the fee reserve to PUSD now? This is a real on-chain trade.")) return;
     const btn = e.target.closest("button");
     btn.disabled = true; btn.textContent = "Converting…";
+    const before = (await fetch("/api/wallet").then((x) => x.json()).catch(() => ({}))).bch_sats;
     r = await post("/api/admin/convert");
+    if (!r.ok && /Could not reach/.test(r.error || "")) {
+      // Phones drop long requests; the swap may still have gone through. Look at the wallet before calling it failed.
+      btn.textContent = "Checking the wallet…";
+      await new Promise((ok) => setTimeout(ok, 8000));
+      const after = (await fetch("/api/wallet").then((x) => x.json()).catch(() => ({}))).bch_sats;
+      if (before && after && after < before / 2) r = { ok: true, converted: null, landed: true };
+      else r.error += ". The swap may still be running: wait a minute and reload before pressing again.";
+    }
     btn.disabled = false; btn.textContent = "Convert BCH to PUSD";
-    if (r.ok) alert(r.converted ? `Converted ${r.converted.bch} BCH to ${r.converted.pusd} PUSD (tx ${r.converted.txid}).` : "Nothing to convert: no BCH above the fee reserve.");
+    if (r.landed) alert("Converted: the BCH is now PUSD (the answer was slow to reach your phone). See the trade log for the transaction.");
+    else if (r.ok) alert(r.converted ? `Converted ${r.converted.bch} BCH to ${r.converted.pusd} PUSD (tx ${r.converted.txid}).` : "Nothing to convert: no BCH above the fee reserve.");
   }
   if (act === "paper") {
     if (!confirm("Switch back to paper trading? Only possible with no live positions open. The wallet keeps its funds.")) return;
