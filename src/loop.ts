@@ -207,6 +207,11 @@ const isRecent = (t: TokenInfo) => Boolean(t.first_pool_ts && Date.now() / 1000 
 /** What the agents look at: market digest, portfolio, scorecard, lessons, owner notes. */
 export async function briefing(env: Env, ctx: Ctx) {
   const { prices, list, tvlDayAgo } = ctx;
+  const held = (await env.DB.prepare("SELECT asset, amount FROM holdings").all<{ asset: string; amount: number }>()).results;
+  const cash = {
+    pusd: held.filter((h) => h.asset === "pusd").reduce((a, h) => a + h.amount / 100, 0),
+    bchPusd: held.filter((h) => h.asset === "bch").reduce((a, h) => a + prices.value("bch", h.amount), 0),
+  };
   const digest = list
     .filter((t) => t.tvl_sats >= 2e8 && t.token_id !== PUSD)
     .map((t) => ({
@@ -242,6 +247,10 @@ export async function briefing(env: Env, ctx: Ctx) {
     launchpad: { live: launchpad.length > 0, sales: launchpad },
     portfolio: {
       total_pusd: round(ctx.book.total),
+      // Buys are paid in PUSD only, so the spendable cash is the PUSD balance, not the total.
+      cash_pusd: round(cash.pusd),
+      bch_held_pusd: round(cash.bchPusd),
+      ...(ctx.live ? { cash_note: `Buys spend PUSD only: ${round(cash.pusd)} PUSD is spendable. The ${round(cash.bchPusd)} PUSD of BCH is the fee reserve plus any top-up the owner hasn't converted yet; don't size buys on it.` } : {}),
       day_change_pct: round(ctx.dayChangePct, 1),
       by_horizon_pusd: Object.fromEntries(Object.entries(ctx.book.byHorizon).map(([k, v]) => [k, round(v)])),
       liquidity_pusd: round(ctx.book.lp),
