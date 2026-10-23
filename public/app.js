@@ -169,6 +169,30 @@ async function loadSentiment() {
     : `<p class="empty">Not launched yet. The desk checks every 15 minutes and alerts the team the moment the first sale appears.</p>`;
 }
 
+async function loadFiles() {
+  const rows = await get("/api/files");
+  const open = new Set([...document.querySelectorAll("#files details[open]")].map((d) => d.dataset.path));
+  const sig = JSON.stringify(rows.map((r) => [r.path, r.version]));
+  if ($("files").dataset.sig === sig) return;
+  $("files").dataset.sig = sig;
+  $("files").innerHTML = rows.length
+    ? rows
+        .map((f) => `<details class="call" data-path="${esc(f.path)}"${open.has(f.path) ? " open" : ""}><summary><code>${esc(f.path)}</code> <small class="hint">v${f.version} · ${esc(f.updated_by ?? "")} · ${ago(f.updated_at)} · ${fmt(f.bytes / 1024, 1)} KB</small></summary><pre class="body" data-load="${esc(f.path)}">Loading…</pre></details>`)
+        .join("")
+    : `<p class="empty">No files yet. The bots write their watchlists, plans and notes here.</p>`;
+  for (const d of document.querySelectorAll("#files details")) {
+    const load = async () => {
+      const pre = d.querySelector("pre");
+      if (pre.dataset.done) return;
+      const f = await get("/api/files/" + encodeURIComponent(d.dataset.path).replace(/%2F/g, "/"));
+      pre.textContent = f.body ?? f.error;
+      pre.dataset.done = "1";
+    };
+    d.addEventListener("toggle", () => d.open && load());
+    if (d.open) load();
+  }
+}
+
 async function loadScorecard() {
   const c = await get("/api/scorecard");
   if (!c || !c.overall.trades) {
@@ -263,6 +287,15 @@ $("owner").addEventListener("click", async () => {
   renderDoc();
 });
 if (token.get()) $("owner").textContent = "Owner log out";
+const showBotButton = () => ($("bottoken").hidden = !token.get());
+showBotButton();
+$("owner").addEventListener("click", () => setTimeout(showBotButton, 1500));
+$("bottoken").addEventListener("click", async () => {
+  if (!confirm("Create a new Grok Bot token? The previous token made here stops working.")) return;
+  const r = await fetch("/api/admin/bot-token", { method: "POST", headers: { authorization: "Bearer " + token.get() } }).then((x) => x.json());
+  if (r.token) prompt("Give this token to Grok Bot. It is shown only once.", r.token);
+  else alert(r.error || "Failed");
+});
 
 let callsSig = "";
 async function loadCalls() {
@@ -276,7 +309,7 @@ async function loadCalls() {
         .map((c) => `<details style="--c: var(--${c.agent})"><summary>${time(c.ts)}<span class="who">${esc(c.agent)}</span>${c.search ? "with X/web search · " : ""}${(c.ms / 1000).toFixed(1)}s${c.error ? ` · <span class="err">${esc(c.error.slice(0, 80))}</span>` : ""}</summary>
           <h3>Input</h3><pre>${esc(c.input)}</pre><h3>Reply</h3><pre>${esc(c.output ?? "")}</pre></details>`)
         .join("")
-    : `<p class="empty">No Grok calls yet. They appear once XAI_API_KEY is set.</p>`;
+    : `<p class="empty">Grok Bot thinks inside the Grok app, so its prompts are not stored here; its decisions are in the activity log. Calls appear here only in xai-api mode.</p>`;
 }
 
 $("filter").addEventListener("change", renderLog);
@@ -291,7 +324,7 @@ $("range").addEventListener("click", (e) => {
 async function refresh() {
   try {
     await loadEvents();
-    await Promise.all([loadState(), loadChart(), loadTrades(), loadJournal(), loadProposals(), loadResearch(), loadSentiment(), loadScorecard(), loadKnowledge(), loadCalls()]);
+    await Promise.all([loadState(), loadChart(), loadTrades(), loadJournal(), loadProposals(), loadResearch(), loadSentiment(), loadFiles(), loadScorecard(), loadKnowledge(), loadCalls()]);
   } catch (err) {
     console.error(err);
   }

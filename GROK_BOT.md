@@ -11,7 +11,7 @@ team's holdings of **ParyonUSD (PUSD)**. Read this file, then follow it every cy
 
 ## 1. What you need from the owner
 - `DESK_URL`: the trading desk, for example `https://cauldron-trading-desk.<account>.workers.dev`
-- `BOT_TOKEN`: send it on every call as `Authorization: Bearer <BOT_TOKEN>`
+- `BOT_TOKEN`: the owner creates it on the desk (Owner login, then Grok Bot token). Send it on every call as `Authorization: Bearer <BOT_TOKEN>`
 
 Keep both in your own memory or secrets. Never paste them into GitHub or the desk log.
 
@@ -107,16 +107,30 @@ curl -s -X POST -H "Authorization: Bearer $BOT_TOKEN" -H "content-type: applicat
 ```
 Lessons are fed back into every later briefing. The owner can reject them on the desk.
 
-## 6. Other calls
+## 6. The hivemind: shared team files
+The desk's database is the team's shared memory. Anything you want to remember between cycles (watchlists, playbooks,
+research dossiers, plans, notes from one agent to another) goes here, never on GitHub. Every briefing lists the files in
+`team_files`. Every write is versioned and the owner can read them all on the desk.
+```
+curl -s -H "Authorization: Bearer $BOT_TOKEN" $DESK_URL/api/bot/files                      # list
+curl -s -H "Authorization: Bearer $BOT_TOKEN" $DESK_URL/api/bot/files/vela/watchlist.md     # read
+curl -s -X PUT -H "Authorization: Bearer $BOT_TOKEN" -H "content-type: application/json" \
+  $DESK_URL/api/bot/files/vela/watchlist.md -d '{"agent":"vela","body":"# Watchlist\n- MOON: fresh pool, recheck at 50 BCH TVL"}'
+curl -s -X DELETE -H "Authorization: Bearer $BOT_TOKEN" $DESK_URL/api/bot/files/vela/old.md  # delete
+```
+Suggested layout: `<agent>/...` for each agent's own notes, `team/...` for shared plans. Up to 500 files of 200 KB each.
+Trades, proposals, research notes, sentiment and lessons have their own endpoints above; use files for everything else.
+
+## 7. Other calls
 - `GET /api/bot/token/<token_id>`: research packet for any token, any time.
 - Public, no token: `/api/state`, `/api/events`, `/api/trades`, `/api/positions`, `/api/proposals`, `/api/research`,
-  `/api/sentiment`, `/api/tokens`, `/api/launchpad`, `/api/scorecard`, `/api/lessons`, `/api/knowledge`.
+  `/api/sentiment`, `/api/tokens`, `/api/launchpad`, `/api/files`, `/api/scorecard`, `/api/lessons`, `/api/knowledge`.
 
-## 7. When the code changes
+## 8. When the code changes
 A GitHub Action deploys every merge to `main` and tells the desk. The next briefing's `recent_code_update` names the commit
 and changed files. If it touches this file, re-read it from GitHub and update your routines.
 
-## 8. Self-improvement
+## 9. Self-improvement
 - The scorecard (30 days, by horizon and by signal) is in every briefing. Lean into what wins.
 - The desk automatically shrinks position sizes on horizons that keep losing.
 - Zara's lessons come back to you every cycle. Apply them.

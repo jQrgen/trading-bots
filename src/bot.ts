@@ -33,6 +33,10 @@ import type { Proposal } from "./risk";
  *   POST /api/bot/journal         Zara's daily journal and lessons
  *   GET  /api/bot/journal-stats   what Zara reviews
  *   GET  /api/bot/token/<id>      research packet for any token
+ *   GET  /api/bot/files           list the team's shared files (the hivemind)
+ *   GET  /api/bot/files/<path>    read one file
+ *   PUT  /api/bot/files/<path>    write one file: {"body": "...", "agent": "vela", "content_type"?: "text/markdown"}
+ *   DELETE /api/bot/files/<path>  delete one file (history is kept)
  *
  * All calls need `Authorization: Bearer <BOT_TOKEN>`.
  */
@@ -42,10 +46,30 @@ const json = (data: unknown, status = 200) =>
 
 const CYCLE_TTL_MS = 30 * 60 * 1000;
 
+export const sha256 = async (text: string) =>
+  [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+/** The bot token is either the BOT_TOKEN secret or one the owner created on the desk (only its hash is stored). */
+async function botAuthorized(req: Request, env: Env) {
+  const sent = (req.headers.get("authorization") ?? "").replace(/^Bearer /, "");
+  if (!sent) return false;
+  if (env.BOT_TOKEN && sent === env.BOT_TOKEN) return true;
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'bot_token_hash'").first<{ value: string }>();
+  return Boolean(row && row.value === (await sha256(sent)));
+}
+
+/** Create a new bot token (replaces the previous desk-made one). Returned once, never stored in plain text. */
+export async function newBotToken(env: Env) {
+  const token = "gb_" + [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('bot_token_hash', ?)").bind(await sha256(token)).run();
+  await env.DB.prepare("INSERT INTO events (ts, agent, kind, message) VALUES (?, 'desk', 'admin', 'Owner created a new Grok Bot token. The previous desk-made token no longer works.')").bind(Date.now()).run();
+  return token;
+}
+
 export async function handleBot(req: Request, env: Env, p: string): Promise<Response> {
-  if (!env.BOT_TOKEN || req.headers.get("authorization") !== `Bearer ${env.BOT_TOKEN}`) return json({ error: "unauthorized: send Authorization: Bearer <BOT_TOKEN>" }, 401);
+  if (!(await botAuthorized(req, env))) return json({ error: "unauthorized: send Authorization: Bearer <BOT_TOKEN>" }, 401);
   configureEndpoints(env);
-  const body = req.method === "POST" ? ((await req.json().catch(() => ({}))) as Record<string, unknown>) : {};
+  const body = req.method === "POST" || req.method === "PUT" ? ((await req.json().catch(() => ({}))) as Record<string, unknown>) : {};
 
   if (p === "/api/bot/briefing" && req.method === "GET") {
     const L = await newCycle(env);
@@ -63,6 +87,7 @@ export async function handleBot(req: Request, env: Env, p: string): Promise<Resp
         strategy: k.get("strategy"),
         roles: Object.fromEntries(["orin", "vela", "kade", "nova", "rune", "zara"].map((a) => [a, k.get(`role:${a}`)])),
       },
+      team_files: (await env.DB.prepare("SELECT path, version, updated_by, updated_at, length(body) AS bytes FROM bot_files ORDER BY updated_at DESC LIMIT 200").all()).results,
       ...(await briefing(env, ctx)),
     });
   }
@@ -80,6 +105,8 @@ export async function handleBot(req: Request, env: Env, p: string): Promise<Resp
     const packet = await research(env, L, ctx, { token_id: tok[1], symbol: t?.display_symbol ?? tok[1].slice(0, 6), signal: "lookup", why: "manual research" });
     return packet ? json(packet) : json({ error: "token not in the current Cauldron list" }, 404);
   }
+
+  if (p === "/api/bot/files" || p.startsWith("/api/bot/files/")) return files(req, env, p.slice("/api/bot/files".length).replace(/^\//, ""), body);
 
   if (req.method !== "POST") return json({ error: "not found" }, 404);
   if (p === "/api/bot/journal") {
@@ -130,4 +157,44 @@ export async function handleBot(req: Request, env: Env, p: string): Promise<Resp
   }
 
   return json({ error: "not found" }, 404);
+}
+
+const MAX_FILE = 200_000;
+const MAX_FILES = 500;
+const AGENTS = ["nova", "orin", "vela", "kade", "rune", "zara"];
+
+/** The team's shared memory. Every write is versioned so the owner can see how it changed. */
+async function files(req: Request, env: Env, rawPath: string, body: Record<string, unknown>): Promise<Response> {
+  const path = decodeURIComponent(rawPath);
+  if (!path) {
+    if (req.method !== "GET") return json({ error: "name a file: /api/bot/files/<path>" }, 400);
+    return json((await env.DB.prepare("SELECT path, content_type, version, updated_by, updated_at, length(body) AS bytes FROM bot_files ORDER BY path").all()).results);
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._\/-]{0,199}$/.test(path) || path.includes("..")) return json({ error: "path: letters, digits, . _ - / only, up to 200 characters" }, 400);
+
+  if (req.method === "GET") {
+    const f = await env.DB.prepare("SELECT * FROM bot_files WHERE path = ?").bind(path).first();
+    return f ? json(f) : json({ error: "no such file" }, 404);
+  }
+  if (req.method === "DELETE") {
+    await env.DB.prepare("DELETE FROM bot_files WHERE path = ?").bind(path).run();
+    return json({ ok: true });
+  }
+  if (req.method !== "PUT" && req.method !== "POST") return json({ error: "use GET, PUT or DELETE" }, 405);
+  if (typeof body.body !== "string") return json({ error: 'send {"body": "...", "agent": "<who>"}' }, 400);
+  if (body.body.length > MAX_FILE) return json({ error: `file too large (max ${MAX_FILE} characters)` }, 413);
+  const agent = AGENTS.includes(String(body.agent)) ? String(body.agent) : "grok";
+  const type = typeof body.content_type === "string" ? body.content_type.slice(0, 100) : "text/markdown";
+  const prev = await env.DB.prepare("SELECT version FROM bot_files WHERE path = ?").bind(path).first<{ version: number }>();
+  if (!prev) {
+    const n = (await env.DB.prepare("SELECT COUNT(*) AS n FROM bot_files").first<{ n: number }>())?.n ?? 0;
+    if (n >= MAX_FILES) return json({ error: `the team already has ${MAX_FILES} files; delete or merge some first` }, 409);
+  }
+  const version = (prev?.version ?? 0) + 1;
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO bot_files (path, body, content_type, version, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET body = excluded.body, content_type = excluded.content_type, version = excluded.version, updated_by = excluded.updated_by, updated_at = excluded.updated_at").bind(path, body.body, type, version, agent, now),
+    env.DB.prepare("INSERT INTO bot_files_history (path, version, body, updated_by, updated_at) VALUES (?, ?, ?, ?, ?)").bind(path, version, body.body, agent, now),
+  ]);
+  return json({ ok: true, path, version });
 }

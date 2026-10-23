@@ -1,6 +1,6 @@
 import type { Env } from "./config";
 import { runCycle, runJournal } from "./loop";
-import { handleBot } from "./bot";
+import { handleBot, newBotToken } from "./bot";
 import { loadKnowledge, parseRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
 
 const json = (data: unknown, status = 200) =>
@@ -89,6 +89,11 @@ export default {
       }
       if (p === "/api/tokens") return json((await env.DB.prepare("SELECT * FROM tokens_seen ORDER BY first_seen DESC LIMIT 500").all()).results);
       if (p === "/api/launchpad") return json((await env.DB.prepare("SELECT id, offered_token_id, status, data, first_seen, updated_at FROM launchpad ORDER BY first_seen DESC").all()).results);
+      if (p === "/api/files") return json((await env.DB.prepare("SELECT path, content_type, version, updated_by, updated_at, length(body) AS bytes FROM bot_files ORDER BY updated_at DESC").all()).results);
+      if (p.startsWith("/api/files/")) {
+        const f = await env.DB.prepare("SELECT * FROM bot_files WHERE path = ?").bind(decodeURIComponent(p.slice(11))).first();
+        return f ? json(f) : json({ error: "no such file" }, 404);
+      }
       if (p === "/api/lessons") return json((await env.DB.prepare("SELECT * FROM lessons ORDER BY id DESC LIMIT 200").all()).results);
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
       return env.ASSETS.fetch(req);
@@ -108,6 +113,7 @@ async function admin(req: Request, env: Env, ctx: ExecutionContext, p: string) {
     await env.DB.prepare("INSERT INTO events (ts, agent, kind, message) VALUES (?, 'desk', 'admin', ?)").bind(Date.now(), halted ? "Owner HALTED the desk. Only exits will run." : "Owner resumed the desk.").run();
     return json({ halted });
   }
+  if (p === "/api/admin/bot-token") return json({ token: await newBotToken(env) });
   if (p === "/api/admin/run") {
     ctx.waitUntil(runCycle(env));
     return json({ started: true });

@@ -95,13 +95,18 @@
     </section>
 
     <section class="panel span-2">
+      <div class="row"><h2>Team files</h2><span class="hint">The bots' shared memory, stored in the database.</span></div>
+      <div id="files" class="calls"></div>
+    </section>
+
+    <section class="panel span-2">
       <div class="row"><h2>Grok calls</h2><span class="hint">Every prompt and reply, for inspection.</span></div>
       <div id="calls"></div>
     </section>
 
   </main>
 
-  <footer>Everything on this page lives in the desk database (Cloudflare D1). <button id="owner" class="linkish">Owner login</button></footer>
+  <footer>Everything on this page lives in the desk database (Cloudflare D1). <button id="bottoken" class="linkish" hidden>Grok Bot token</button> <button id="owner" class="linkish">Owner login</button></footer>
   <script src="/app.js"></script>
 </body>
 </html>

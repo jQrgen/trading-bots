@@ -38,11 +38,11 @@ You don't need to run anything locally. The GitHub Action creates the D1 databas
    - `CLOUDFLARE_API_TOKEN`: the token from step 1
    - `CLOUDFLARE_ACCOUNT_ID`: your account ID
    - `ADMIN_TOKEN`: any long random string; it's the owner password for the halt switch and strategy edits
-   - `BOT_TOKEN`: another long random string; Grok Bot uses it to call the team API
+   - `BOT_TOKEN`: optional. Grok Bot needs a token to call the team API; you can instead create one on the desk (Owner login, then **Grok Bot token**)
    - `XAI_API_KEY`: optional, only if you set `BRAIN = "xai-api"`
 3. **GitHub variable.** On the same page, under Variables, add `DEPLOY_ENABLED` = `true`.
 4. **Deploy.** Go to Actions → Deploy trading desk → Run workflow (or push to `main`).
-5. **Start the team.** Open the Grok Bot app, paste the repo link, and give it the desk URL and `BOT_TOKEN`. Ask it to follow `GROK_BOT.md`. It creates a 15-minute trading routine and a daily journal routine.
+5. **Start the team.** Open the Grok Bot app, paste the repo link, and give it the desk URL and the bot token (from the desk's **Grok Bot token** button, or your `BOT_TOKEN` secret). Ask it to follow `GROK_BOT.md`. It creates a 15-minute trading routine and a daily journal routine.
 
 The run summary shows the desk URL (`https://cauldron-trading-desk.<your-subdomain>.workers.dev`). If your account has never used Workers, open Workers & Pages in the dashboard once so it creates your workers.dev subdomain. To use your own domain, add a route in the Cloudflare dashboard and set the variable `DESK_URL` to it.
 
