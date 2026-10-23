@@ -1,0 +1,40 @@
+name: Apple app
+
+on:
+  pull_request:
+    paths: ["apps/apple/**", ".github/workflows/apple.yml"]
+  push:
+    branches: [main]
+    paths: ["apps/apple/**", ".github/workflows/apple.yml"]
+
+concurrency:
+  group: apple-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: apps/apple
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test DeskKit
+        working-directory: apps/apple/DeskKit
+        run: swift test
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen
+
+      - name: Build iOS
+        run: xcodebuild build -project TradingDesk.xcodeproj -scheme TradingDesk-iOS -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO -quiet
+
+      - name: Build macOS
+        run: xcodebuild build -project TradingDesk.xcodeproj -scheme TradingDesk-macOS -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO -quiet
+
+      - name: Build tvOS
+        run: xcodebuild build -project TradingDesk.xcodeproj -scheme TradingDesk-tvOS -destination 'generic/platform=tvOS Simulator' CODE_SIGNING_ALLOWED=NO -quiet
