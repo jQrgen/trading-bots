@@ -2,7 +2,7 @@ import SwiftUI
 import DeskKit
 
 enum Screen: String, CaseIterable, Identifiable {
-    case overview, agents, activity, trades, journal, settings
+    case overview, agents, activity, trades, playbook, settings
 
     var id: String { rawValue }
 
@@ -12,7 +12,7 @@ enum Screen: String, CaseIterable, Identifiable {
         case .agents: "Agents"
         case .activity: "Activity"
         case .trades: "Trades"
-        case .journal: "Journal"
+        case .playbook: "Playbook"
         case .settings: "Settings"
         }
     }
@@ -23,7 +23,7 @@ enum Screen: String, CaseIterable, Identifiable {
         case .agents: "person.3"
         case .activity: "list.bullet.rectangle"
         case .trades: "arrow.left.arrow.right"
-        case .journal: "book"
+        case .playbook: "book"
         case .settings: "gear"
         }
     }
@@ -40,7 +40,7 @@ enum Screen: String, CaseIterable, Identifiable {
         case .activity: ActivityView()
         case .trades: TradesView()
         #endif
-        case .journal: JournalView()
+        case .playbook: PlaybookView()
         case .settings: SettingsView()
         }
     }

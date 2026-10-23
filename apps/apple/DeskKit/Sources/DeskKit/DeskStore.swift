@@ -12,6 +12,10 @@ public final class DeskStore {
     public private(set) var positions: [Position] = []
     public private(set) var journal: [JournalEntry] = []
     public private(set) var lessons: [Lesson] = []
+    public private(set) var team: TeamRoster = Team.fallback
+    public private(set) var knowledge: [KnowledgeEntry] = []
+    public private(set) var scorecard: Scorecard?
+    public private(set) var proposals: [Proposal] = []
 
     public private(set) var isLoading = false
     public private(set) var lastRefresh: Date?
@@ -38,6 +42,10 @@ public final class DeskStore {
         positions = []
         journal = []
         lessons = []
+        team = Team.fallback
+        knowledge = []
+        scorecard = nil
+        proposals = []
         lastRefresh = nil
         lastError = nil
         await refresh()
@@ -62,6 +70,10 @@ public final class DeskStore {
         async let positionsTask = capture { try await service.positions() }
         async let journalTask = capture { try await service.journal() }
         async let lessonsTask = capture { try await service.lessons() }
+        async let teamTask = capture { try await service.team() }
+        async let knowledgeTask = capture { try await service.knowledge() }
+        async let scorecardTask = capture { try await service.scorecard() }
+        async let proposalsTask = capture { try await service.proposals(limit: 200) }
 
         switch await stateTask { case .success(let v): state = v; case .failure(let e): note(e) }
         switch await eventsTask { case .success(let v): merge(events: v); case .failure(let e): note(e) }
@@ -73,6 +85,10 @@ public final class DeskStore {
         switch await positionsTask { case .success(let v): positions = v; case .failure(let e): note(e) }
         switch await journalTask { case .success(let v): journal = v.sorted { $0.ts > $1.ts }; case .failure(let e): note(e) }
         switch await lessonsTask { case .success(let v): lessons = v.sorted { $0.ts > $1.ts }; case .failure(let e): note(e) }
+        switch await teamTask { case .success(let v): if !v.members.isEmpty { team = v }; case .failure(let e): note(e) }
+        switch await knowledgeTask { case .success(let v): knowledge = v; case .failure(let e): note(e) }
+        switch await scorecardTask { case .success(let v): scorecard = v; case .failure(let e): note(e) }
+        switch await proposalsTask { case .success(let v): proposals = v.sorted { $0.ts > $1.ts }; case .failure(let e): note(e) }
 
         lastError = firstError?.localizedDescription
         if firstError == nil || state != nil { lastRefresh = Date() }
@@ -111,10 +127,10 @@ public final class DeskStore {
     /// The six agents with their latest status and last thing they said.
     public var agentCards: [AgentCard] {
         let statuses = Dictionary((state?.agents ?? []).map { ($0.agent.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
-        return Team.members.map { m in
+        return team.members.map { m in
             AgentCard(member: m,
-                      status: statuses[m.id]?.status,
-                      updatedAt: statuses[m.id]?.updatedAt,
+                      status: statuses[m.id]?.status ?? m.status,
+                      updatedAt: statuses[m.id]?.updatedAt ?? m.statusAt,
                       lastEvent: events.first { $0.agent.lowercased() == m.id })
         }
     }
@@ -144,6 +160,15 @@ public final class DeskStore {
     }
 
     public var isLive: Bool { state?.mode == .live }
+
+    /// Knowledge documents other than agent role files, which are shown with each agent.
+    public var playbook: [KnowledgeEntry] {
+        knowledge.filter { $0.roleAgent == nil }
+    }
+
+    public func roleDocument(for agent: String) -> KnowledgeEntry? {
+        knowledge.first { $0.roleAgent == agent }
+    }
 }
 
 private func capture<T>(_ body: () async throws -> T) async -> Result<T, Error> {

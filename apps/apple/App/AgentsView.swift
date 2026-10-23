@@ -8,7 +8,7 @@ struct AgentsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Metrics.spacing) {
                 StatusBanner()
-                Text("The loop: " + Team.loop.map(Team.displayName).joined(separator: " → "))
+                Text("The loop: " + store.team.loop.map(store.team.displayName).joined(separator: " → "))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 TeamGraphView()
@@ -29,7 +29,7 @@ struct AgentsView: View {
     }
 }
 
-/// The reporting structure from graph/team.yaml, drawn as a tree.
+/// The reporting structure stored in the database (/api/team), drawn as a tree.
 struct TeamGraphView: View {
     @Environment(DeskStore.self) private var store
 
@@ -38,18 +38,21 @@ struct TeamGraphView: View {
             VStack(spacing: 10) {
                 node(label: "You", sub: "Owner", color: .gray)
                 connector
-                branch(for: "nova")
+                ForEach(store.team.reports(of: store.team.owner)) { branch(for: $0.id) }
             }
             .frame(maxWidth: .infinity)
-            Text("Kade can veto any trade, independently of Nova. Zara also reports to you directly.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            let vetoes = store.team.members.filter(\.hasVeto).map(\.name)
+            if !vetoes.isEmpty {
+                Text("\(vetoes.joined(separator: ", ")) can veto any trade.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
     private func branch(for id: String) -> AnyView {
-        guard let m = Team.member(id) else { return AnyView(EmptyView()) }
-        let reports = Team.reports(of: id)
+        guard let m = store.team.member(id) else { return AnyView(EmptyView()) }
+        let reports = store.team.reports(of: id)
         return AnyView(VStack(spacing: 10) {
             node(label: m.name, sub: m.role + (m.hasVeto ? " · veto" : ""), color: .agent(m.id))
             if !reports.isEmpty {
@@ -91,13 +94,27 @@ struct AgentDetailView: View {
                     HStack(spacing: 14) {
                         AgentAvatar(id: card.id, size: 52)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("\(card.member.role) · \(card.member.horizon) horizon").font(.headline)
-                            Text(card.member.job).font(.callout).foregroundStyle(.secondary)
+                            Text(card.member.role).font(.headline)
+                            Text("\(card.member.horizonLabel) horizon" + (card.member.hasVeto ? " · can veto" : ""))
+                                .font(.callout).foregroundStyle(.secondary)
                         }
                     }
                     LabeledContent("Status", value: card.status ?? "Waiting for first cycle")
                     LabeledContent("Updated", value: Format.relative(card.updatedAt))
-                    LabeledContent("Reports to", value: card.member.reportsTo.map { $0 == Team.owner ? "You" : Team.displayName($0) }.joined(separator: ", "))
+                    LabeledContent("Reports to", value: card.member.reportsTo.map(store.team.displayName).joined(separator: ", "))
+                    if !card.member.tools.isEmpty {
+                        LabeledContent("Tools", value: card.member.tools.joined(separator: ", "))
+                    }
+                }
+                Section {
+                    if let role = store.roleDocument(for: memberID) {
+                        NavigationLink(value: role) {
+                            Label("Role and instructions (v\(role.version))", systemImage: "doc.text")
+                        }
+                    }
+                    NavigationLink(value: AgentCallsRoute(agent: memberID)) {
+                        Label("Grok calls: prompts and replies", systemImage: "brain")
+                    }
                 }
             }
             Section("Recent activity") {
@@ -109,7 +126,99 @@ struct AgentDetailView: View {
                 }
             }
         }
-        .navigationTitle(Team.displayName(memberID))
+        .navigationTitle(store.team.displayName(memberID))
         .navigationDestination(for: DeskEvent.self) { EventDetailView(event: $0) }
+        .navigationDestination(for: KnowledgeEntry.self) { KnowledgeDetailView(entry: $0) }
+        .navigationDestination(for: AgentCallsRoute.self) { AgentCallsView(agent: $0.agent) }
+    }
+}
+
+struct AgentCallsRoute: Hashable {
+    var agent: String
+}
+
+/// The exact Grok prompts and replies for one agent, newest first (GET /api/agent-calls).
+struct AgentCallsView: View {
+    @Environment(DeskStore.self) private var store
+    var agent: String
+    @State private var calls: [AgentCall] = []
+    @State private var error: String?
+    @State private var loaded = false
+
+    var body: some View {
+        List {
+            if let error {
+                Text(error).foregroundStyle(.secondary)
+            } else if loaded && calls.isEmpty {
+                Text("No calls recorded yet.").foregroundStyle(.secondary)
+            }
+            ForEach(calls) { call in
+                NavigationLink(value: call) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(Format.dateTime(call.ts)).font(.headline).monospacedDigit()
+                            Spacer()
+                            if call.error != nil {
+                                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            }
+                            if call.search {
+                                Image(systemName: "globe").foregroundStyle(.secondary)
+                            }
+                            if let ms = call.ms {
+                                Text("\(Format.pusd(Double(ms) / 1000, decimals: 1)) s").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Text(call.output ?? call.error ?? "").font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+            }
+        }
+        .navigationTitle("\(store.team.displayName(agent)): Grok calls")
+        .navigationDestination(for: AgentCall.self) { AgentCallDetailView(call: $0) }
+        .task {
+            do {
+                calls = try await store.service.agentCalls(agent: agent, limit: 100)
+                error = nil
+            } catch {
+                self.error = error.localizedDescription
+            }
+            loaded = true
+        }
+    }
+}
+
+struct AgentCallDetailView: View {
+    @Environment(DeskStore.self) private var store
+    var call: AgentCall
+    @State private var full: AgentCall?
+
+    var body: some View {
+        let c = full ?? call
+        List {
+            Section {
+                LabeledContent("Time", value: c.ts.formatted(date: .abbreviated, time: .standard))
+                LabeledContent("Model", value: c.model + (c.search ? " with live search" : ""))
+                if let ms = c.ms { LabeledContent("Took", value: "\(Format.pusd(Double(ms) / 1000, decimals: 1)) s") }
+                if let cycle = c.cycle { LabeledContent("Cycle", value: "\(cycle)") }
+            }
+            if let error = c.error {
+                Section("Error") { Text(error).foregroundStyle(.red) }
+            }
+            Section("Reply") { mono(c.output ?? "–") }
+            Section("Input") { mono(c.input) }
+            Section("System prompt") {
+                if let prompt = c.systemPrompt {
+                    mono(prompt)
+                } else {
+                    ProgressView()
+                }
+            }
+        }
+        .navigationTitle("Call \(c.id)")
+        .task { full = try? await store.service.agentCall(id: call.id) }
+    }
+
+    private func mono(_ text: String) -> some View {
+        Text(text).font(.system(.footnote, design: .monospaced)).tvFocusable()
     }
 }

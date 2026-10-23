@@ -114,4 +114,86 @@ public struct DemoDesk: DeskService {
             Lesson(id: 5, ts: ago(60 * 63), lesson: "Sell everything at midnight UTC.", status: "rejected"),
         ]
     }
+
+    public func team() async throws -> TeamRoster { Team.fallback }
+
+    public func knowledge() async throws -> [KnowledgeEntry] {
+        [
+            KnowledgeEntry(key: "strategy", title: "Strategy", kind: "strategy", format: "markdown", body: """
+            # Strategy
+
+            Goal: **maximise holdings valued in PUSD**.
+
+            - Long (60%): hold PUSD; BCH only when Nova's macro view is bullish.
+            - Medium (25%): established CashTokens with real liquidity, trend and mean reversion on daily candles.
+            - Short (15%): new tokens and volume spikes. Small fixed bets, strict rug checks, fast stops.
+            """, version: 3, updatedBy: "owner", updatedAt: ago(60 * 20)),
+            KnowledgeEntry(key: "risk-limits", title: "Risk limits", kind: "risk", format: "json", body: """
+            {"maxPositionPct":{"short":3,"medium":8,"long":20},"minTradePusd":5,"maxPriceImpactPct":2,"maxPoolSharePct":2,"minTvlBch":{"short":5,"medium":20},"maxOpenShort":4,"dailyLossHaltPct":5}
+            """, version: 2, updatedBy: "kade", updatedAt: ago(60 * 30)),
+            KnowledgeEntry(key: "market", title: "Market notes", kind: "market", format: "markdown", body: """
+            # Cauldron pitfalls
+
+            - Every pool is token/BCH, so every trade is token → BCH → PUSD.
+            - Pools are thin: keep each trade under 2% of pool liquidity.
+            - A token whose minting baton still exists can be inflated at will.
+            """, version: 5, updatedBy: "zara", updatedAt: ago(60 * 15)),
+            KnowledgeEntry(key: "role:kade", title: "Kade: risk officer", kind: "role", format: "markdown", body: """
+            # Kade
+
+            You are the risk officer. You can **veto** any trade. Check pool age, TVL, holder concentration and slippage before anything is bought.
+            """, version: 1, updatedBy: "seed", updatedAt: ago(60 * 40)),
+        ]
+    }
+
+    public func knowledgeHistory(key: String) async throws -> [KnowledgeVersion] {
+        let current = try await knowledge().first { $0.key == key }
+        guard let current else { return [] }
+        return (1...current.version).reversed().map { v in
+            KnowledgeVersion(version: v, body: v == current.version ? current.body : "(earlier version \(v))",
+                             updatedBy: v == 1 ? "seed" : current.updatedBy, updatedAt: ago(Double(current.version - v + 1) * 600))
+        }
+    }
+
+    public func scorecard() async throws -> Scorecard? {
+        Scorecard(ts: ago(20), windowDays: 30,
+                  overall: .init(trades: 9, winRate: 0.67, avgPnlPct: 3.4, pnlPusd: 31.8),
+                  byHorizon: ["short": .init(trades: 5, winRate: 0.4, avgPnlPct: -1.2, pnlPusd: -4.1),
+                              "medium": .init(trades: 4, winRate: 1, avgPnlPct: 9.1, pnlPusd: 35.9)],
+                  bySignal: ["volume-spike": .init(trades: 4, winRate: 0.75, avgPnlPct: 6.0, pnlPusd: 22.0),
+                             "breakout": .init(trades: 5, winRate: 0.6, avgPnlPct: 1.3, pnlPusd: 9.8)])
+    }
+
+    public func proposals(limit: Int) async throws -> [Proposal] {
+        [
+            Proposal(id: "p-412-1", ts: ago(5), cycle: 412, agent: "vela", action: "buy", tokenId: "furu", symbol: "FURU", horizon: "medium",
+                     sizePct: 9.5, targetPct: 18, stopPct: 8, signal: "volume-spike", thesis: "Volume up 3.2x on 24h with verified metadata.",
+                     bullCase: "Active developer, rising holder count, deep enough pool.", bearCase: "Spike could be one whale; fades within days.",
+                     status: "filled", allowedPusd: 95, riskNotes: "Pool 41 days, TVL 38 BCH, no minting baton.", decisionNote: "Approved at 9.5%.", positionId: 14),
+            Proposal(id: "p-412-2", ts: ago(5), cycle: 412, agent: "vela", action: "buy", tokenId: "dogecash", symbol: "DCASH", horizon: "short",
+                     sizePct: 6, targetPct: 25, stopPct: 10, signal: "breakout", thesis: "Breakout above the 7-day range.",
+                     bullCase: "Momentum and social buzz.", bearCase: "Pool is thin; exit would move price.",
+                     status: "risk_failed", allowedPusd: nil, riskNotes: "Trade would be 4.1% of pool liquidity (limit 2%).", decisionNote: nil, positionId: nil),
+        ]
+    }
+
+    public func agentCalls(agent: String?, limit: Int) async throws -> [AgentCall] {
+        let all = [
+            AgentCall(id: 88, ts: ago(5), cycle: 412, agent: "vela", model: "grok-4", search: true,
+                      input: "Signals: FURU volume 3.2x, DCASH +14% in 4h. Write proposals.", output: "{\"proposals\":[{\"symbol\":\"FURU\"}]}", ms: 8400),
+            AgentCall(id: 87, ts: ago(6), cycle: 412, agent: "orin", model: "grok-4", search: false,
+                      input: "214 tokens scanned. Summarise notable moves.", output: "FURU volume spike; DCASH breakout; nothing else notable.", ms: 3100),
+            AgentCall(id: 86, ts: ago(5), cycle: 412, agent: "kade", model: "grok-4", search: false,
+                      input: "Review FURU and DCASH proposals against risk limits.", output: "FURU passes. DCASH fails pool share.", ms: 2900),
+        ]
+        return Array(all.filter { agent == nil || $0.agent == agent }.prefix(limit))
+    }
+
+    public func agentCall(id: Int) async throws -> AgentCall {
+        guard var call = try await agentCalls(agent: nil, limit: 100).first(where: { $0.id == id }) else {
+            throw DeskError.http(status: 404, message: "not found")
+        }
+        call.systemPrompt = "You are \(Team.displayName(call.agent)) on the Cauldron trading desk."
+        return call
+    }
 }

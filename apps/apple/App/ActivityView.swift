@@ -17,7 +17,7 @@ struct ActivityView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         chip(nil, "All")
-                        ForEach(Team.members) { chip($0.id, $0.name) }
+                        ForEach(store.team.members) { chip($0.id, $0.name) }
                         chip("desk", "Desk")
                     }
                     .padding(.vertical, 4)

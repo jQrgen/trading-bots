@@ -11,6 +11,15 @@ public protocol DeskService: Sendable {
     func positions() async throws -> [Position]
     func journal() async throws -> [JournalEntry]
     func lessons() async throws -> [Lesson]
+    func team() async throws -> TeamRoster
+    func knowledge() async throws -> [KnowledgeEntry]
+    func knowledgeHistory(key: String) async throws -> [KnowledgeVersion]
+    /// nil until the first scorecard is computed.
+    func scorecard() async throws -> Scorecard?
+    func proposals(limit: Int) async throws -> [Proposal]
+    func agentCalls(agent: String?, limit: Int) async throws -> [AgentCall]
+    /// One call including its system prompt.
+    func agentCall(id: Int) async throws -> AgentCall
 }
 
 public enum DeskError: LocalizedError, Equatable {
@@ -98,6 +107,24 @@ public struct DeskClient: DeskService {
     public func positions() async throws -> [Position] { try await list("api/positions") }
     public func journal() async throws -> [JournalEntry] { try await list("api/journal") }
     public func lessons() async throws -> [Lesson] { try await list("api/lessons") }
+    public func team() async throws -> TeamRoster { try await get("api/team") }
+    public func knowledge() async throws -> [KnowledgeEntry] { try await list("api/knowledge") }
+    public func scorecard() async throws -> Scorecard? { try await get("api/scorecard") }
+    public func agentCall(id: Int) async throws -> AgentCall { try await get("api/agent-calls/\(id)") }
+
+    public func knowledgeHistory(key: String) async throws -> [KnowledgeVersion] {
+        try await list("api/knowledge/\(key)/history")
+    }
+
+    public func proposals(limit: Int) async throws -> [Proposal] {
+        try await list("api/proposals", ["limit": "\(limit)"])
+    }
+
+    public func agentCalls(agent: String?, limit: Int) async throws -> [AgentCall] {
+        var query = ["limit": "\(limit)"]
+        if let agent { query["agent"] = agent }
+        return try await list("api/agent-calls", query)
+    }
 
     func url(_ path: String, _ query: [String: String] = [:]) -> URL {
         var url = baseURL.appending(path: path)

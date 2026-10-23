@@ -10,7 +10,8 @@ name: TestFlight
 
 on:
   push:
-    branches: [main]
+    # The claude/ branch is here only to test the first upload before PR #3 merges; remove it then.
+    branches: [main, claude/project-thread-5dwynh]
     paths: ["apps/apple/**", ".github/workflows/testflight.yml"]
   workflow_dispatch:
 

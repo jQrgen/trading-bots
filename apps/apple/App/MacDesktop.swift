@@ -145,7 +145,7 @@ struct MacActivityView: View {
             ToolbarItem {
                 Picker("Agent", selection: $agent) {
                     Text("All agents").tag("all")
-                    ForEach(Team.members) { Text($0.name).tag($0.id) }
+                    ForEach(store.team.members) { Text($0.name).tag($0.id) }
                     Text("Desk").tag("desk")
                 }
                 .pickerStyle(.menu)
@@ -169,19 +169,22 @@ struct MacActivityView: View {
 // MARK: - Trades and positions tables
 
 struct MacTradesView: View {
-    enum Tab: String, CaseIterable { case fills = "Fills", open = "Open positions", closed = "Closed positions" }
+    enum Tab: String, CaseIterable { case ideas = "Ideas", fills = "Fills", open = "Open positions", closed = "Closed positions" }
 
     @Environment(DeskStore.self) private var store
     @State private var tab = Tab.fills
     @State private var search = ""
     @State private var tradeSelection: Trade.ID?
     @State private var positionSelection: Position.ID?
+    @State private var proposalSelection: Proposal.ID?
+    @State private var proposalSort = [KeyPathComparator(\Proposal.ts, order: .reverse)]
     @State private var tradeSort = [KeyPathComparator(\Trade.id, order: .reverse)]
     @State private var positionSort = [KeyPathComparator(\Position.id, order: .reverse)]
 
     var body: some View {
         Group {
             switch tab {
+            case .ideas: proposalsTable
             case .fills: tradesTable
             case .open: positionsTable(store.openPositions)
             case .closed: positionsTable(store.closedPositions)
@@ -197,13 +200,40 @@ struct MacTradesView: View {
             }
         }
         .inspector(isPresented: inspectorShown) { inspector.inspectorColumnWidth(min: 280, ideal: 340) }
-        .onChange(of: tab) { tradeSelection = nil; positionSelection = nil }
+        .onChange(of: tab) { tradeSelection = nil; positionSelection = nil; proposalSelection = nil }
         .navigationTitle("Trades")
         .deskToolbar()
     }
 
     private func matches(_ symbol: String) -> Bool {
         search.isEmpty || symbol.localizedCaseInsensitiveContains(search)
+    }
+
+    private var proposalsTable: some View {
+        Table(store.proposals.filter { matches($0.symbol) }.sorted(using: proposalSort), selection: $proposalSelection, sortOrder: $proposalSort) {
+            TableColumn("Time", value: \.ts) { Text(Format.dateTime($0.ts)).monospacedDigit() }
+                .width(min: 110, ideal: 120)
+            TableColumn("Agent", value: \.agent) { p in
+                HStack(spacing: 6) {
+                    AgentAvatar(id: p.agent, size: 16)
+                    Text(Team.displayName(p.agent))
+                }
+            }
+            .width(min: 70, ideal: 80)
+            TableColumn("Action", value: \.action) { Text($0.action.uppercased()) }
+                .width(55)
+            TableColumn("Token", value: \.symbol)
+                .width(min: 60, ideal: 80)
+            TableColumn("Horizon") { Text($0.horizon ?? "–") }
+                .width(60)
+            TableColumn("Signal") { Text($0.signal ?? "–") }
+                .width(min: 80, ideal: 100)
+            TableColumn("Status", value: \.status) { p in
+                Text(p.statusLabel).fontWeight(.medium).foregroundStyle(proposalColor(p.status))
+            }
+            .width(min: 80, ideal: 90)
+            TableColumn("Thesis") { Text($0.thesis ?? "").lineLimit(1).help($0.thesis ?? "") }
+        }
     }
 
     private var tradesTable: some View {
@@ -261,16 +291,25 @@ struct MacTradesView: View {
 
     @ViewBuilder
     private var inspector: some View {
-        if tab == .fills, let t = store.trades.first(where: { $0.id == tradeSelection }) {
+        if tab == .ideas, let p = store.proposals.first(where: { $0.id == proposalSelection }) {
+            ProposalDetailView(proposal: p)
+        } else if tab == .fills, let t = store.trades.first(where: { $0.id == tradeSelection }) {
             TradeDetailView(trade: t)
-        } else if tab != .fills, let p = (store.openPositions + store.closedPositions).first(where: { $0.id == positionSelection }) {
+        } else if tab == .open || tab == .closed, let p = (store.openPositions + store.closedPositions).first(where: { $0.id == positionSelection }) {
             PositionDetailView(position: p)
         }
     }
 
     private var inspectorShown: Binding<Bool> {
-        Binding(get: { tab == .fills ? tradeSelection != nil : positionSelection != nil },
-                set: { if !$0 { tradeSelection = nil; positionSelection = nil } })
+        Binding(get: { hasSelection }, set: { if !$0 { tradeSelection = nil; positionSelection = nil; proposalSelection = nil } })
+    }
+
+    private var hasSelection: Bool {
+        switch tab {
+        case .ideas: return proposalSelection != nil
+        case .fills: return tradeSelection != nil
+        case .open, .closed: return positionSelection != nil
+        }
     }
 }
 

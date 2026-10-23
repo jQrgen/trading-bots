@@ -143,20 +143,84 @@ final class StoreTests: XCTestCase {
             func positions() async throws -> [Position] { [] }
             func journal() async throws -> [JournalEntry] { [] }
             func lessons() async throws -> [Lesson] { [] }
+            func team() async throws -> TeamRoster { throw DeskError.http(status: 500, message: nil) }
+            func knowledge() async throws -> [KnowledgeEntry] { [] }
+            func knowledgeHistory(key: String) async throws -> [KnowledgeVersion] { [] }
+            func scorecard() async throws -> Scorecard? { nil }
+            func proposals(limit: Int) async throws -> [Proposal] { [] }
+            func agentCalls(agent: String?, limit: Int) async throws -> [AgentCall] { [] }
+            func agentCall(id: Int) async throws -> AgentCall { throw DeskError.http(status: 404, message: nil) }
         }
         let store = DeskStore(service: Down())
         await store.refresh()
         XCTAssertEqual(store.lastError, "The desk answered 500: boom.")
         XCTAssertNil(store.state)
+        XCTAssertEqual(store.team, Team.fallback, "keeps the built-in team when /api/team fails")
     }
 }
 
 final class TeamTests: XCTestCase {
-    func testGraphMatchesTeamYaml() {
-        XCTAssertEqual(Team.members.map(\.id), ["nova", "orin", "vela", "kade", "rune", "zara"])
-        XCTAssertEqual(Team.reports(of: "human").map(\.id), ["nova"])
-        XCTAssertEqual(Team.reports(of: "nova").map(\.id), ["vela", "kade", "rune", "zara"])
-        XCTAssertEqual(Team.reports(of: "vela").map(\.id), ["orin"])
-        XCTAssertTrue(Team.member("KADE")?.hasVeto == true)
+    func testFallbackGraph() {
+        let t = Team.fallback
+        XCTAssertEqual(t.members.map(\.id), ["nova", "orin", "vela", "kade", "rune", "zara"])
+        XCTAssertEqual(t.reports(of: "human").map(\.id), ["nova"])
+        XCTAssertEqual(t.reports(of: "nova").map(\.id), ["vela", "kade", "rune", "zara"])
+        XCTAssertEqual(t.reports(of: "vela").map(\.id), ["orin"])
+        XCTAssertTrue(t.member("KADE")?.hasVeto == true)
+        XCTAssertEqual(t.member("vela")?.horizonLabel, "Medium / long")
+        XCTAssertEqual(t.member("nova")?.horizonLabel, "All")
+    }
+
+    func testTeamFromAPI() throws {
+        let json = """
+        {"owner":"human","loop":["orin","nova"],"agents":[
+          {"id":"nova","name":"Nova","role":"Head trader","horizons":["short","medium","long"],"reports_to":["human"],"veto":false,"tools":["approve"],"status":"thinking","status_at":1761220800000},
+          {"id":"orin","name":"Orin","role":"Scanner","horizons":["short"],"reports_to":["nova"],"veto":true,"tools":[],"status":null,"status_at":null}]}
+        """
+        let t = try DeskDecoder.make().decode(TeamRoster.self, from: Data(json.utf8))
+        XCTAssertEqual(t.members.map(\.number), [1, 2])
+        XCTAssertEqual(t.member("nova")?.status, "thinking")
+        XCTAssertEqual(t.member("nova")?.tools, ["approve"])
+        XCTAssertEqual(t.member("orin")?.hasVeto, true)
+        XCTAssertEqual(t.reports(of: "nova").map(\.id), ["orin"])
+        XCTAssertEqual(t.displayName("human"), "You")
+    }
+}
+
+final class KnowledgeTests: XCTestCase {
+    let decoder = DeskDecoder.make()
+
+    func testKnowledgeAndScorecard() throws {
+        let k = #"[{"key":"role:kade","title":"Kade","kind":"role","format":"markdown","body":"# Kade","version":2,"updated_by":"owner","updated_at":1761220800000},{"key":"risk-limits","title":"Risk","kind":"risk","format":"json","body":"{}","version":1,"updated_by":"seed","updated_at":1761220800000}]"#
+        let entries = try decoder.decode(LossyArray<KnowledgeEntry>.self, from: Data(k.utf8)).items
+        XCTAssertEqual(entries.map(\.roleAgent), ["kade", nil])
+        XCTAssertEqual(entries[1].isJSON, true)
+        XCTAssertEqual(entries[0].updatedBy, "owner")
+
+        let sc = #"{"ts":1761220800000,"window_days":30,"overall":{"trades":4,"win_rate":0.5,"avg_pnl_pct":2.5,"pnl_pusd":10},"by_horizon":{"short":{"trades":4,"win_rate":0.5,"avg_pnl_pct":2.5,"pnl_pusd":10}},"by_signal":{}}"#
+        let card = try decoder.decode(Scorecard?.self, from: Data(sc.utf8))
+        XCTAssertEqual(card?.overall.winRate, 0.5)
+        XCTAssertEqual(card?.byHorizon["short"]?.trades, 4)
+        XCTAssertNil(try decoder.decode(Scorecard?.self, from: Data("null".utf8)))
+    }
+
+    func testProposalsAndCalls() throws {
+        let p = #"[{"id":"abc","ts":1761220800000,"cycle":3,"agent":"vela","action":"buy","token_id":"t","symbol":"ABC","horizon":"short","size_pct":2,"target_pct":20,"stop_pct":8,"signal":"breakout","thesis":"x","bull_case":"up","bear_case":"down","status":"risk_failed","allowed_pusd":null,"risk_notes":"thin","decision_note":null,"position_id":null},{"id":7,"ts":1761220800000,"symbol":"N","status":"filled"}]"#
+        let props = try decoder.decode(LossyArray<Proposal>.self, from: Data(p.utf8)).items
+        XCTAssertEqual(props.map(\.id), ["abc", "7"])
+        XCTAssertEqual(props[0].statusLabel, "risk failed")
+        XCTAssertEqual(props[0].bearCase, "down")
+
+        let c = #"{"id":5,"ts":1761220800000,"cycle":1,"agent":"orin","model":"grok-4","search":1,"system_prompt":"You are Orin","input":"in","output":null,"error":"timeout","ms":30000}"#
+        let call = try decoder.decode(AgentCall.self, from: Data(c.utf8))
+        XCTAssertTrue(call.search)
+        XCTAssertEqual(call.systemPrompt, "You are Orin")
+        XCTAssertEqual(call.error, "timeout")
+    }
+
+    func testJSONRows() {
+        let rows = JSONRows.rows(#"{"maxPositionPct":{"short":3,"long":20},"min_trade_pusd":5,"allow":true,"tags":["a","b"]}"#)
+        XCTAssertEqual(rows.map(\.label), ["Allow", "Max position pct · Long", "Max position pct · Short", "Min trade pusd", "Tags"])
+        XCTAssertEqual(rows.map(\.value), ["yes", "20", "3", "5", "a, b"])
     }
 }

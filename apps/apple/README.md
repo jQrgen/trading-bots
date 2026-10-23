@@ -5,10 +5,10 @@ A native SwiftUI app that shows what the bot team is doing. It is **read-only**:
 | Screen | What it shows |
 |---|---|
 | Desk | Total value in PUSD, P&L since start and over 24h, win rate, balance chart (24h to 90d), holdings, open positions, agent tiles, latest activity |
-| Agents | Reporting structure (from `graph/team.yaml`), each agent's live status and its own activity log |
+| Agents | Reporting structure, each agent's live status, role document, tools, its own activity log and its exact Grok prompts and replies |
 | Activity | Every event the bots log (scan, signal, proposal, risk pass/fail, decision, fill, journal…), filterable by agent, with the raw data |
-| Trades | Fills, open positions and closed positions, with thesis, target/stop and close reason |
-| Journal | Zara's daily reports and the lessons (active and rejected) |
+| Trades | Trade ideas (with bull and bear case, risk check and decision), fills, open positions and closed positions |
+| Playbook | The scorecard, the strategy, risk limits and market notes (with version history), Zara's daily reports and the lessons |
 
 On the Mac it's a proper desktop app rather than a stretched phone layout:
 
@@ -64,10 +64,15 @@ The app reads these endpoints from `src/index.ts` (snake_case JSON, epoch-millis
 | `GET /api/positions` | Open and closed positions |
 | `GET /api/journal` | Daily reports (`lessons` is a JSON string) |
 | `GET /api/lessons` | Lessons with `active` / `rejected` status |
+| `GET /api/team` | The team graph and each agent's status |
+| `GET /api/knowledge`, `/api/knowledge/<key>/history` | Strategy, risk limits, market notes, roles, and every past version |
+| `GET /api/scorecard` | The rolling track record by horizon and signal (or `null`) |
+| `GET /api/proposals?limit=` | Trade ideas and what happened to each |
+| `GET /api/agent-calls?agent=&limit=`, `/api/agent-calls/<id>` | Grok prompts and replies, with the system prompt on the detail call |
 
 Decoding is lenient: unknown fields are ignored, missing optional fields are fine, and a malformed row is dropped rather than failing the whole screen. If the Worker's response shapes change, update `DeskKit/Sources/DeskKit/Models.swift` and the fixtures in `DeskKitTests`.
 
-If the team changes, update `Team.members` in `DeskKit/Sources/DeskKit/Team.swift` to match `graph/team.yaml`.
+All dynamic data comes from the database through these endpoints. `Team.fallback` in `DeskKit/Sources/DeskKit/Team.swift` mirrors `seed/team.json` and is used only until `/api/team` loads.
 
 ## App Store Connect and TestFlight
 
