@@ -2,7 +2,8 @@ import { activePools, broadcastTx, routerBuild, symbolOf } from "./cauldron";
 import { PUSD, type Env, type RiskLimits } from "./config";
 import { DEFAULT_SERVERS, electrum, listUnspent } from "./chain/electrum";
 import { bytesToHex, decodeTx, txidOf } from "./chain/tx";
-import { swap, type BuildResult, type Coin, type SwapResult } from "./chain/swap";
+import { buildPoolSwap, poolScript, type PoolCoin } from "./chain/pools";
+import { fundingFor, swap, type BuildResult, type Coin, type SwapResult } from "./chain/swap";
 import { scripthash, walletFrom, type Wallet } from "./chain/wallet";
 import type { Ledger } from "./ledger";
 import type { Prices } from "./market";
@@ -12,7 +13,8 @@ import type { Prices } from "./market";
  *
  *  - The owner switches it on and off on the desk (settings.mode). It is off until then.
  *  - The key is a Worker secret (WALLET_SEED or WALLET_WIF), never in D1, logs, prompts or GitHub files.
- *  - Every swap: router tx.build -> check the wallet's net change against the order -> sign our inputs -> broadcast.
+ *  - Every swap: build (our own pool builder from live chain state; the router as a fallback) -> check the wallet's
+ *    net change against the order -> sign our inputs -> broadcast.
  *  - Holdings are whatever the chain says the wallet holds, re-read every cycle.
  *  - "Freeze" stops every on-chain transaction at once, exits included.
  */
@@ -91,6 +93,38 @@ export interface LiveFill extends SwapResult { verified: true }
  * One real swap. `expectedOut` is the desk's own quote; the router's transaction must deliver at least
  * expectedOut minus the slippage allowance, and may spend at most RISK.liveMaxFeeSats of BCH on fees.
  */
+/**
+ * The current coins of a token's biggest Cauldron pools, read from Fulcrum. The indexer only tells us which
+ * pools exist (owner pkh); their coins come from the chain, mempool included, so we never spend a stale one.
+ */
+export async function livePools(env: Env, category: string, top = 8): Promise<PoolCoin[]> {
+  const rows = (await activePools(category)) as Array<{ owner_pkh?: string; sats: number }>;
+  const owners = [...new Set(rows.sort((a, b) => b.sats - a.sats).map((r) => r.owner_pkh).filter((x): x is string => !!x && /^[0-9a-f]{40}$/.test(x)))].slice(0, top);
+  const pools: PoolCoin[] = [];
+  for (const pkh of owners) {
+    const utxos = await listUnspent(servers(env), scripthash(poolScript(pkh))).catch(() => []);
+    for (const u of utxos) {
+      if (u.token_data?.category !== category || u.token_data.nft) continue;
+      pools.push({ txid: u.tx_hash, vout: u.tx_pos, sats: BigInt(u.value), tokens: BigInt(u.token_data.amount), category, pkh });
+    }
+  }
+  return pools;
+}
+
+/** Swap builder: our own pool transaction from live pool coins, or the router's if we can't build one. */
+function builder(env: Env, w: Wallet, coins: Coin[]) {
+  return async (p: Record<string, unknown>): Promise<BuildResult> => {
+    const sell = String(p.sell), buy = String(p.buy);
+    try {
+      const pools = await livePools(env, sell === "bch" ? buy : sell);
+      return buildPoolSwap({ sell, buy, amount: BigInt(String(p.amount)), minOutput: BigInt(String(p.min_output ?? "0")), pools, funding: fundingFor(coins, sell), script: w.script });
+    } catch (e) {
+      const r = await routerBuild<BuildResult>(p);
+      return { ...r, route: { ...(r.route as object), direct_failed: (e as Error).message } };
+    }
+  };
+}
+
 export async function liveSwap(
   env: Env, L: Ledger, RISK: RiskLimits,
   o: { sell: string; buy: string; amount: bigint; expectedOut: bigint; slippagePct?: number; maxFeeSats?: number },
@@ -108,7 +142,7 @@ export async function liveSwap(
   const slip = o.slippagePct ?? RISK.liveSlippagePct;
   const minOutput = (o.expectedOut * BigInt(Math.round((100 - slip) * 100))) / 10000n;
   const deps = {
-    build: (p: Record<string, unknown>) => routerBuild<BuildResult>(p),
+    build: builder(env, w, coins),
     broadcast: async (hex: string) => {
       try {
         return await broadcastTx(hex);
@@ -221,10 +255,11 @@ export async function dryRunSwap(env: Env, L: Ledger, RISK: RiskLimits, o: { sel
   const coins = await coinsFor(env, L, w, true);
   let built: BuildResult | null = null;
   let signed = "";
+  const build = builder(env, w, coins);
   let verdict = "signed (not broadcast)";
   try {
     await swap(w, coins, { sell: o.sell, buy: o.buy, amount: o.amount, minOutput: 0n, maxFeeSats: BigInt(RISK.liveMaxFeeSats) + o.amount / 100n }, {
-      build: async (p) => (built = await routerBuild<BuildResult>(p)),
+      build: async (p) => (built = await build(p)),
       broadcast: async (hex) => {
         signed = hex;
         throw new Error("dry run: not broadcast");
