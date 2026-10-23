@@ -40,6 +40,17 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(s.runner?.state, "complete")
         XCTAssertTrue(s.runner?.summary.contains("cycle 27") == true)
         XCTAssertTrue(s.runner?.summary.contains("done") == true)
+
+        let runner = try XCTUnwrap(s.runner)
+        let due = try XCTUnwrap(runner.nextRunAt)
+        XCTAssertFalse(runner.isOverdue(now: due.addingTimeInterval(60)))
+        XCTAssertTrue(runner.isOverdue(now: due.addingTimeInterval(5 * 60)))
+        XCTAssertTrue(runner.summary(now: due.addingTimeInterval(5 * 60)).contains("next run overdue (was due 12:15 UTC)"))
+        var running = runner
+        running.state = "running"
+        XCTAssertFalse(running.isOverdue(now: due.addingTimeInterval(5 * 60)))
+        let flagged = try decoder.decode(RunnerStatus.self, from: Data(#"{"state":"complete","next_run_at":1761221700000,"overdue":false}"#.utf8))
+        XCTAssertFalse(flagged.isOverdue(now: due.addingTimeInterval(3600)), "the desk's flag wins")
         let member = try XCTUnwrap(Team.fallback.member("orin"))
         let event = DeskEvent(id: 9, ts: Date(timeIntervalSince1970: 1_761_220_800), cycle: 27, agent: "orin", kind: "scan", message: "Scanned 40 tokens, 8 signals")
         let idle = AgentCard(member: member, status: "idle, waiting for Grok Bot", updatedAt: nil, lastEvent: event)
