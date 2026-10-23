@@ -16,6 +16,11 @@ public final class DeskStore {
     public private(set) var knowledge: [KnowledgeEntry] = []
     public private(set) var scorecard: Scorecard?
     public private(set) var proposals: [Proposal] = []
+    public private(set) var tokens: [TokenSeen] = []
+    public private(set) var research: [ResearchNote] = []
+    public private(set) var sentiment: [SentimentReading] = []
+    public private(set) var launchpad: [LaunchpadSale] = []
+    public private(set) var files: [BotFile] = []
 
     public private(set) var isLoading = false
     public private(set) var lastRefresh: Date?
@@ -46,6 +51,11 @@ public final class DeskStore {
         knowledge = []
         scorecard = nil
         proposals = []
+        tokens = []
+        research = []
+        sentiment = []
+        launchpad = []
+        files = []
         lastRefresh = nil
         lastError = nil
         await refresh()
@@ -74,6 +84,11 @@ public final class DeskStore {
         async let knowledgeTask = capture { try await service.knowledge() }
         async let scorecardTask = capture { try await service.scorecard() }
         async let proposalsTask = capture { try await service.proposals(limit: 200) }
+        async let tokensTask = capture { try await service.tokens() }
+        async let researchTask = capture { try await service.research(token: nil) }
+        async let sentimentTask = capture { try await service.sentiment(subject: nil) }
+        async let launchpadTask = capture { try await service.launchpad() }
+        async let filesTask = capture { try await service.files() }
 
         switch await stateTask { case .success(let v): state = v; case .failure(let e): note(e) }
         switch await eventsTask { case .success(let v): merge(events: v); case .failure(let e): note(e) }
@@ -89,6 +104,11 @@ public final class DeskStore {
         switch await knowledgeTask { case .success(let v): knowledge = v; case .failure(let e): note(e) }
         switch await scorecardTask { case .success(let v): scorecard = v; case .failure(let e): note(e) }
         switch await proposalsTask { case .success(let v): proposals = v.sorted { $0.ts > $1.ts }; case .failure(let e): note(e) }
+        switch await tokensTask { case .success(let v): tokens = v.sorted { $0.firstSeen > $1.firstSeen }; case .failure(let e): note(e) }
+        switch await researchTask { case .success(let v): research = v.sorted { $0.ts > $1.ts }; case .failure(let e): note(e) }
+        switch await sentimentTask { case .success(let v): sentiment = v.sorted { $0.ts > $1.ts }; case .failure(let e): note(e) }
+        switch await launchpadTask { case .success(let v): launchpad = v.sorted { $0.firstSeen > $1.firstSeen }; case .failure(let e): note(e) }
+        switch await filesTask { case .success(let v): files = v.sorted { $0.updatedAt > $1.updatedAt }; case .failure(let e): note(e) }
 
         lastError = firstError?.localizedDescription
         if firstError == nil || state != nil { lastRefresh = Date() }
@@ -168,6 +188,21 @@ public final class DeskStore {
 
     public func roleDocument(for agent: String) -> KnowledgeEntry? {
         knowledge.first { $0.roleAgent == agent }
+    }
+
+    /// The latest reading for the BCH market and for Cauldron, in that order, when there is one.
+    public var marketMood: [SentimentReading] {
+        ["bch", "cauldron"].compactMap { subject in sentiment.first { $0.subject == subject } }
+    }
+
+    /// Research notes about one token, newest first.
+    public func notes(about tokenId: String) -> [ResearchNote] {
+        research.filter { $0.tokenId == tokenId }
+    }
+
+    /// Sentiment readings about one token, newest first.
+    public func mood(about tokenId: String) -> [SentimentReading] {
+        sentiment.filter { $0.subject == "token" && $0.tokenId == tokenId }
     }
 }
 

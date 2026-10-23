@@ -150,7 +150,8 @@ struct AgentCallsView: View {
             if let error {
                 Text(error).foregroundStyle(.secondary)
             } else if loaded && calls.isEmpty {
-                Text("No calls recorded yet.").foregroundStyle(.secondary)
+                Text("No calls recorded. The team thinks in the Grok app, so its prompts and replies aren't stored here; they show up only when the desk calls Grok itself.")
+                    .foregroundStyle(.secondary)
             }
             ForEach(calls) { call in
                 NavigationLink(value: call) {

@@ -8,11 +8,12 @@ A native SwiftUI app that shows what the bot team is doing. It is **read-only**:
 | Agents | Reporting structure, each agent's live status, role document, tools, its own activity log and its exact Grok prompts and replies |
 | Activity | Every event the bots log (scan, signal, proposal, risk pass/fail, decision, fill, journal…), filterable by agent, with the raw data |
 | Trades | Trade ideas (with bull and bear case, risk check and decision), fills, open positions and closed positions |
-| Playbook | The scorecard, the strategy, risk limits and market notes (with version history), Zara's daily reports and the lessons |
+| Research | The mood on X about BCH and Cauldron, every new token on Cauldron and the launchpad with its research status, Vela's research notes (verdict, how it could make money, sources) and launchpad sales |
+| Playbook | The scorecard, the strategy, risk limits and market notes (with version history), the agents' shared notes, Zara's daily reports and the lessons |
 
 On the Mac it's a proper desktop app rather than a stretched phone layout:
 
-- A sidebar window (several windows are fine) with ⌘1 to ⌘5 to switch sections (the **Go** menu) and ⌘R to refresh.
+- A sidebar window (several windows are fine) with ⌘1 to ⌘6 to switch sections (the **Go** menu) and ⌘R to refresh.
 - Activity and Trades are sortable, searchable tables. Selecting a row opens its details in an inspector on the right.
 - A **menu bar extra** shows total value at all times. Clicking it shows P&L, win rate, the latest bot activity and an Open Desk button, so you can keep an eye on the desk with the window closed.
 - Preferences live in the standard Settings window (⌘,).
@@ -41,7 +42,7 @@ open TradingDesk.xcodeproj
 
 Pick the `TradingDesk-iOS`, `TradingDesk-macOS` or `TradingDesk-tvOS` scheme and run. Signing uses the team set in `project.yml` (`DEVELOPMENT_TEAM`) with automatic provisioning.
 
-With no desk URL set, the app shows **demo data**. To see the real bots, open Settings and enter the Worker URL, e.g. `https://cauldron-trading-desk.<account>.workers.dev`. `http://localhost:8787` works too while running `wrangler dev`.
+The app connects to the live desk, `https://cauldron-trading-desk.nordiccrypto.workers.dev`, out of the box (`AppConfig.defaultURL`). Settings can point it at `http://localhost:8787` while running `wrangler dev`, or clear the field to see **demo data**.
 
 Tests:
 
@@ -68,7 +69,12 @@ The app reads these endpoints from `src/index.ts` (snake_case JSON, epoch-millis
 | `GET /api/knowledge`, `/api/knowledge/<key>/history` | Strategy, risk limits, market notes, roles, and every past version |
 | `GET /api/scorecard` | The rolling track record by horizon and signal (or `null`) |
 | `GET /api/proposals?limit=` | Trade ideas and what happened to each |
-| `GET /api/agent-calls?agent=&limit=`, `/api/agent-calls/<id>` | Grok prompts and replies, with the system prompt on the detail call |
+| `GET /api/agent-calls?agent=&limit=`, `/api/agent-calls/<id>` | Grok prompts and replies, with the system prompt on the detail call (empty while the team runs in the Grok app) |
+| `GET /api/tokens` | New tokens and their research status |
+| `GET /api/research?token=` | Research notes (`sources` is a JSON string) |
+| `GET /api/sentiment?subject=token\|cauldron\|bch` | Mood on X, score -1 to +1 |
+| `GET /api/launchpad` | Launchpad sales (`data` is a JSON string) |
+| `GET /api/files`, `/api/files/<path>` | The agents' shared notes; the text only on the single-file call |
 
 Decoding is lenient: unknown fields are ignored, missing optional fields are fine, and a malformed row is dropped rather than failing the whole screen. If the Worker's response shapes change, update `DeskKit/Sources/DeskKit/Models.swift` and the fixtures in `DeskKitTests`.
 
