@@ -541,3 +541,35 @@ final class LiveTests: XCTestCase {
         XCTAssertEqual(Explorer.url("abc123")?.absoluteString, "https://explorer.nordiccrypto.no/search/?q=abc123&chain=bch")
     }
 }
+
+final class LiveActivityTests: XCTestCase {
+    let decoder = DeskDecoder.make()
+
+    func testOnlyWhenLive() throws {
+        let paper = try decoder.decode(DeskState.self, from: Data(#"{"mode":"paper","stats":{}}"#.utf8))
+        XCTAssertNil(LiveActivityState(state: paper, dayChange: 1))
+    }
+
+    func testCycleLine() throws {
+        let json = #"{"mode":"live","start_pusd":250,"total_pusd":248.89,"frozen":false,"stats":{},"runner":{"cycle":49,"state":"complete","next_run_at":1761221700000}}"#
+        let s = try decoder.decode(DeskState.self, from: Data(json.utf8))
+        let due = try XCTUnwrap(s.runner?.nextRunAt)
+
+        let onTime = try XCTUnwrap(LiveActivityState(state: s, dayChange: -0.5, now: due.addingTimeInterval(-60)))
+        XCTAssertEqual(onTime.cycleLine, "Cycle 49 done")
+        XCTAssertEqual(onTime.pnlPusd!, -1.11, accuracy: 0.0001)
+        XCTAssertEqual(onTime.dayPusd, -0.5)
+        XCTAssertEqual(onTime.staleDate, due.addingTimeInterval(20 * 60))
+
+        let late = try XCTUnwrap(LiveActivityState(state: s, dayChange: nil, now: due.addingTimeInterval(10 * 60)))
+        XCTAssertTrue(late.overdue)
+        XCTAssertEqual(late.cycleLine, "Cycle 49 done · next run overdue (was due 12:15 UTC)")
+
+        var running = s
+        running.cycleRunning = true
+        running.step = "Vela research"
+        let busy = try XCTUnwrap(LiveActivityState(state: running, dayChange: nil, now: due.addingTimeInterval(10 * 60)))
+        XCTAssertFalse(busy.overdue)
+        XCTAssertEqual(busy.cycleLine, "Cycle 49 · Vela research")
+    }
+}

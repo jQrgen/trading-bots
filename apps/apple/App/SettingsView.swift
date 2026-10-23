@@ -5,6 +5,9 @@ struct SettingsView: View {
     @Environment(DeskStore.self) private var store
     @AppStorage(AppConfig.urlKey) private var savedURL = AppConfig.defaultURL
     @AppStorage(AppConfig.intervalKey) private var interval = AppConfig.defaultInterval
+    #if os(iOS)
+    @AppStorage(LiveActivityController.enabledKey) private var liveActivity = true
+    #endif
     @State private var draft = ""
     @State private var check: String?
 
@@ -40,6 +43,14 @@ struct SettingsView: View {
             } footer: {
                 Text("The Cloudflare Worker that runs the bots. The live desk is the default; leave the field empty to see demo data. The app only reads; it can't trade or halt the desk.")
             }
+
+            #if os(iOS)
+            Section {
+                Toggle("Live Activity", isOn: $liveActivity)
+            } footer: {
+                Text("While the desk trades real money, show its value, P&L and next run on the Lock Screen and in the Dynamic Island. It updates when the app refreshes, including iOS background refresh, which runs about every 15 minutes or less often.")
+            }
+            #endif
 
             Section("Refresh") {
                 Picker("Every", selection: $interval) {
