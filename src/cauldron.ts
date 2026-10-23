@@ -1,12 +1,14 @@
-import { INDEXER, ROUTER_WS, type Env } from "./config";
+import { BROADCAST, INDEXER, ROUTER_WS, type Env } from "./config";
 
 let indexer = INDEXER;
 let router = ROUTER_WS;
+let broadcastUrl = BROADCAST;
 
 /** Optional endpoint overrides, used for local testing against a mock server. */
 export function configureEndpoints(env: Env) {
   indexer = env.INDEXER_URL || INDEXER;
   router = env.ROUTER_URL || ROUTER_WS;
+  broadcastUrl = env.BROADCAST_URL || BROADCAST;
 }
 
 export interface TokenInfo {
@@ -87,25 +89,40 @@ export async function launchpadList(): Promise<Record<string, unknown>[]> {
   return Array.isArray(r) ? r : ((r as { idos?: Record<string, unknown>[] }).idos ?? []);
 }
 
-/** Exact-in quote from the Cauldron router. sell/buy are "bch" or a token category. */
-export async function routerQuote(sell: string, buy: string, amount: bigint): Promise<Quote> {
+/** One JSON-RPC call to the Cauldron router over its WebSocket. */
+async function routerCall<T>(method: string, params: Record<string, unknown>, timeoutMs = 10_000): Promise<T> {
   const res = await fetch(router, { headers: { Upgrade: "websocket" } });
   const ws = res.webSocket;
   if (!ws) throw new Error(`router: no websocket (${res.status})`);
   ws.accept();
   try {
-    return await new Promise<Quote>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("router: timeout")), 10_000);
+    return await new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("router: timeout")), timeoutMs);
       ws.addEventListener("message", (ev) => {
         clearTimeout(timer);
         const msg = JSON.parse(String(ev.data));
         if (msg.error) reject(new Error(`router: ${JSON.stringify(msg.error)}`));
-        else resolve(msg.result as Quote);
+        else resolve(msg.result as T);
       });
       ws.addEventListener("close", () => reject(new Error("router: closed")));
-      ws.send(JSON.stringify({ id: 1, method: "route.quote", params: { sell, buy, amount: amount.toString(), side: "sell" } }));
+      ws.send(JSON.stringify({ id: 1, method, params }));
     });
   } finally {
     ws.close();
   }
+}
+
+/** Exact-in quote from the Cauldron router. sell/buy are "bch" or a token category. */
+export const routerQuote = (sell: string, buy: string, amount: bigint) =>
+  routerCall<Quote>("route.quote", { sell, buy, amount: amount.toString(), side: "sell" });
+
+/** Unsigned swap transaction from the router (tx.build). The router never broadcasts. */
+export const routerBuild = <T>(params: Record<string, unknown>) => routerCall<T>("tx.build", params, 20_000);
+
+/** Broadcast a signed transaction through Cauldron's broadcast API (avoids double-spend races on chained pool trades). */
+export async function broadcastTx(hex: string): Promise<string> {
+  const res = await fetch(broadcastUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tx: hex }) });
+  const body = (await res.json().catch(() => ({}))) as { txid?: string; error?: { code?: string; message?: string } };
+  if (!res.ok || body.error || !body.txid) throw new Error(`broadcast: ${body.error?.code ?? res.status} ${body.error?.message ?? ""}`.trim());
+  return body.txid;
 }

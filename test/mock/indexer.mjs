@@ -50,3 +50,25 @@ http.createServer(async (req, res) => {
   res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
 }).listen(8788, () => console.log("mock indexer on :8788"));
+
+// Fake Electrum (Fulcrum) on plain TCP for the live wallet: ELECTRUM_SERVERS="tcp://127.0.0.1:50001" in .dev.vars.
+// Every address holds 100 PUSD and 0.01 BCH.
+import net from "node:net";
+net.createServer((sock) => {
+  let buf = "";
+  sock.on("data", (d) => {
+    buf += d;
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const req = JSON.parse(buf.slice(0, nl));
+      buf = buf.slice(nl + 1);
+      const result = req.method === "blockchain.scripthash.listunspent"
+        ? [
+            { tx_hash: "01".repeat(32), tx_pos: 0, height: 1, value: 1000, token_data: { category: PUSD, amount: "10000" } },
+            { tx_hash: "02".repeat(32), tx_pos: 1, height: 1, value: 1000000 },
+          ]
+        : req.method === "server.version" ? ["mock", "1.5"] : null;
+      sock.write(JSON.stringify({ jsonrpc: "2.0", id: req.id, result }) + "\n");
+    }
+  });
+}).listen(50001);

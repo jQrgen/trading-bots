@@ -1,3 +1,4 @@
+import { modeOf } from "./live";
 import type { Env } from "./config";
 import { Ledger } from "./ledger";
 import { loadKnowledge } from "./knowledge";
@@ -232,6 +233,7 @@ async function correctPosition(env: Env, body: Record<string, unknown>) {
   const exit = Math.round(Number(body.exit_pusd) * 100) / 100;
   const reason = typeof body.reason === "string" ? body.reason.slice(0, 2000) : "";
   if (!(id > 0) || !(amount > 0) || !(exit >= 0) || !reason) return json({ error: "need position_id, amount, exit_pusd, reason" }, 400);
+  if ((await modeOf(env)) === "live") return json({ error: "live positions follow the chain and can't be corrected by hand" }, 409);
   const pos = await env.DB.prepare("SELECT * FROM positions WHERE id = ? AND status = 'closed'").bind(id).first<{ token_id: string; symbol: string; amount: number; cost_pusd: number; exit_pusd: number }>();
   if (!pos) return json({ error: "no closed position with that id" }, 404);
   const key = `corrected_position_${id}`;

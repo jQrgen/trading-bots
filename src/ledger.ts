@@ -1,4 +1,5 @@
 import type { Env, Horizon } from "./config";
+import { modeOf, type Mode } from "./live";
 import type { Proposal } from "./risk";
 
 export type Agent = "nova" | "orin" | "vela" | "kade" | "rune" | "zara" | "desk";
@@ -23,6 +24,13 @@ export interface Position {
 export class Ledger {
   constructor(readonly env: Env, public cycle: number) {}
   private get db() { return this.env.DB; }
+  private modeCache?: Mode;
+
+  /** Paper or live, as the owner last set it on the desk. Read once per ledger so a cycle never mixes the two. */
+  async mode(): Promise<Mode> {
+    return (this.modeCache ??= await modeOf(this.env));
+  }
+  async live() { return (await this.mode()) === "live"; }
 
   async log(agent: Agent, kind: string, message: string, data?: unknown) {
     await this.db
@@ -76,10 +84,10 @@ export class Ledger {
       .run();
   }
 
-  async recordTrade(t: { side: "buy" | "sell" | "lp-in" | "lp-out" | "correction"; token_id: string; symbol: string; amount: number; pusd: number; price_pusd: number; impact_pct: number; estimated: boolean; position_id: number | null; reason: string }) {
+  async recordTrade(t: { side: "buy" | "sell" | "lp-in" | "lp-out" | "correction"; token_id: string; symbol: string; amount: number; pusd: number; price_pusd: number; impact_pct: number; estimated: boolean; position_id: number | null; reason: string; txid?: string }) {
     await this.db
-      .prepare("INSERT INTO trades (ts, cycle, mode, side, token_id, symbol, amount, pusd, price_pusd, impact_pct, estimated, position_id, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(Date.now(), this.cycle, this.env.MODE, t.side, t.token_id, t.symbol, t.amount, t.pusd, t.price_pusd, t.impact_pct, t.estimated ? 1 : 0, t.position_id, t.reason)
+      .prepare("INSERT INTO trades (ts, cycle, mode, side, token_id, symbol, amount, pusd, price_pusd, impact_pct, estimated, position_id, reason, txid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(Date.now(), this.cycle, await this.mode(), t.side, t.token_id, t.symbol, t.amount, t.pusd, t.price_pusd, t.impact_pct, t.estimated ? 1 : 0, t.position_id, t.reason, t.txid ?? null)
       .run();
   }
 
@@ -119,13 +127,13 @@ export class Ledger {
   }
 
   async snapshot(totalPusd: number, bchPusd: number) {
-    await this.db.prepare("INSERT OR REPLACE INTO snapshots (ts, total_pusd, bch_pusd) VALUES (?, ?, ?)").bind(Date.now(), totalPusd, bchPusd).run();
+    await this.db.prepare("INSERT OR REPLACE INTO snapshots (ts, total_pusd, bch_pusd, mode) VALUES (?, ?, ?, ?)").bind(Date.now(), totalPusd, bchPusd, await this.mode()).run();
   }
 
   async valueAt(msAgo: number): Promise<number | null> {
     const row = await this.db
-      .prepare("SELECT total_pusd FROM snapshots WHERE ts <= ? ORDER BY ts DESC LIMIT 1")
-      .bind(Date.now() - msAgo)
+      .prepare("SELECT total_pusd FROM snapshots WHERE ts <= ? AND mode = ? ORDER BY ts DESC LIMIT 1")
+      .bind(Date.now() - msAgo, await this.mode())
       .first<{ total_pusd: number }>();
     return row?.total_pusd ?? null;
   }

@@ -29,13 +29,15 @@ async function loadState() {
   $("mode").textContent = s.mode === "live" ? "LIVE" : "PAPER";
   $("mode").className = "badge" + (s.mode === "live" ? " live" : "");
   $("halted").hidden = !s.halted;
+  $("frozen").hidden = !s.frozen;
+  deskState = s;
   const g = s.grok_bot ?? {};
   const fail = g.last_auth_failure && (!g.last_seen || g.last_auth_failure.ts > g.last_seen) ? g.last_auth_failure : null;
   $("grokstatus").textContent = g.last_seen ? `Grok Bot last connected ${ago(g.last_seen)}.` : "Grok Bot hasn't connected yet.";
   $("grokstatus").title = fail ? `Last rejected call ${ago(fail.ts)}: ${fail.reason}` : "";
   if (fail) $("grokstatus").textContent += ` Last rejected call ${ago(fail.ts)}: ${fail.reason}`;
   $("total").textContent = fmt(s.total_pusd);
-  const pnl = s.total_pusd == null ? null : s.total_pusd - s.start_pusd;
+  const pnl = s.total_pusd == null || !s.start_pusd ? null : s.total_pusd - s.start_pusd;
   $("pnl").textContent = pnl == null ? "–" : signed(pnl);
   $("pnl").className = cls(pnl);
   $("pnlpct").textContent = pnl == null ? "" : signed((pnl / s.start_pusd) * 100, 1) + "%";
@@ -248,7 +250,7 @@ async function loadTrades() {
   $("trades").innerHTML = t.length
     ? `<table><tr><th>When</th><th>Side</th><th>Token</th><th class="num">PUSD</th><th class="num">Impact</th></tr>${t
         .slice(0, 50)
-        .map((r) => `<tr title="${esc(r.reason)}"><td>${new Date(r.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td><td class="${r.side === "buy" || r.side === "lp-in" ? "up" : "down"}">${{ "lp-in": "ADD LIQ", "lp-out": "WITHDRAW" }[r.side] ?? r.side.toUpperCase()}${r.mode === "paper" ? " (paper)" : ""}</td><td>${esc(r.symbol)}</td><td class="num">${fmt(r.pusd)}</td><td class="num">${fmt(r.impact_pct)}%${r.estimated ? "*" : ""}</td></tr>`)
+        .map((r) => `<tr title="${esc(r.reason)}"><td>${new Date(r.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td><td class="${r.side === "buy" || r.side === "lp-in" ? "up" : "down"}">${{ "lp-in": "ADD LIQ", "lp-out": "WITHDRAW" }[r.side] ?? r.side.toUpperCase()}${r.mode === "paper" ? " (paper)" : ""}${r.txid ? ` <a href="https://blockchair.com/bitcoin-cash/transaction/${esc(r.txid)}" target="_blank" rel="noopener">tx</a>` : ""}</td><td>${esc(r.symbol)}</td><td class="num">${fmt(r.pusd)}</td><td class="num">${fmt(r.impact_pct)}%${r.estimated ? "*" : ""}</td></tr>`)
         .join("")}</table>`
     : `<p class="empty">No trades yet.</p>`;
 }
@@ -451,7 +453,7 @@ $("bottoken").addEventListener("click", async () => {
   const r = await fetch("/api/admin/bot-token", { method: "POST", headers: { authorization: "Bearer " + token.get() } }).then((x) => x.json());
   if (!r.token) return alert(r.error || "Failed");
   const link = `${location.origin}/grok?key=${r.token}`;
-  const text = `Read ${link} and set up the Cauldron trading team it describes. The access key is in the link. Run the trading cycle every 15 minutes and the journal every day at 21:00 UTC. Paper trading only.`;
+  const text = `Read ${link} and set up the Cauldron trading team it describes. The access key is in the link. Run the trading cycle every 15 minutes and the journal every day at 21:00 UTC.`;
   // A real dialog with a copy button: iOS prompt() boxes make it easy to copy only part of the text.
   const box = document.createElement("div");
   box.className = "token-box";
@@ -472,6 +474,55 @@ $("bottoken").addEventListener("click", async () => {
   });
   document.body.append(box);
 });
+
+// Live wallet: address and balances for everyone; the switches for the owner only.
+let deskState = null;
+async function loadWallet() {
+  const w = await get("/api/wallet");
+  const el = $("wallet");
+  if (!w.has_secret) {
+    el.innerHTML = "No wallet yet. The owner adds the wallet's seed phrase as the <code>WALLET_SEED</code> GitHub secret and redeploys.";
+  } else if (!w.address) {
+    el.textContent = `Wallet secret can't be read: ${w.error ?? "unknown error"}`;
+  } else {
+    const bal = w.error ? `Balance unavailable: ${esc(w.error)}` : `<strong>${fmt(w.pusd)}</strong> PUSD · <strong>${fmt(w.bch_sats / 1e8, 5)}</strong> BCH${w.tokens?.length ? ` · ${w.tokens.length} other token${w.tokens.length > 1 ? "s" : ""}` : ""}`;
+    el.innerHTML = `<p>${w.mode === "live" ? `<span class="badge live">LIVE</span> since ${new Date(w.live_since).toLocaleString()}` : `<span class="badge">NOT LIVE</span> The desk is paper trading; this wallet is untouched until the owner presses Go live.`}${w.frozen ? ' <span class="badge danger">FROZEN</span>' : ""}</p>
+      <p>Address: <code>${esc(w.address)}</code><br><small>Token-aware: <code>${esc(w.token_address)}</code>. Send PUSD and a little BCH (for fees) here. Check it matches your own wallet app first.</small></p>
+      <p>${bal}</p>`;
+  }
+  const ctl = $("walletctl");
+  ctl.hidden = !token.get();
+  const live = w.mode === "live";
+  ctl.querySelector('[data-act="live"]').hidden = live || !w.address;
+  ctl.querySelector('[data-act="paper"]').hidden = !live;
+  ctl.querySelector('[data-act="halt"]').textContent = deskState?.halted ? "Resume buys" : "Halt buys";
+  ctl.querySelector('[data-act="freeze"]').textContent = w.frozen ? "Unfreeze wallet" : "Freeze wallet";
+}
+$("walletctl").addEventListener("click", async (e) => {
+  const act = e.target.dataset?.act;
+  if (!act) return;
+  const post = (path, body) => fetch(path, { method: "POST", headers: { authorization: "Bearer " + token.get(), "content-type": "application/json" }, body: JSON.stringify(body ?? {}) }).then(async (r) => ({ ok: r.ok, ...(await r.json().catch(() => ({}))) }));
+  let r;
+  if (act === "halt") r = await post("/api/admin/halt", { halted: !deskState?.halted });
+  if (act === "freeze") {
+    const frozen = $("frozen").hidden;
+    if (frozen && !confirm("Freeze the wallet? No on-chain transactions at all, not even stop-loss sells, until you unfreeze.")) return;
+    r = await post("/api/admin/freeze", { frozen });
+  }
+  if (act === "live") {
+    const typed = prompt("This switches the desk to REAL MONEY. The paper book is archived and the bots trade the wallet's funds within the live limits. Type GO LIVE to confirm.");
+    if (typed !== "GO LIVE") return;
+    r = await post("/api/admin/live", { confirm: "GO LIVE" });
+  }
+  if (act === "paper") {
+    if (!confirm("Switch back to paper trading? Only possible with no live positions open. The wallet keeps its funds.")) return;
+    r = await post("/api/admin/paper");
+  }
+  if (r && !r.ok) alert(r.error || "Failed");
+  await loadState();
+  await loadWallet();
+});
+$("owner").addEventListener("click", () => setTimeout(loadWallet, 1500));
 
 let callsSig = "";
 async function loadCalls() {
@@ -523,3 +574,6 @@ async function refresh() {
 refresh();
 loadData();
 setInterval(refresh, 15000);
+// The wallet is read from the chain on each request, so poll it less often.
+loadWallet().catch(() => {});
+setInterval(() => loadWallet().catch(() => {}), 60000);

@@ -12,6 +12,7 @@
       <h1>Cauldron Trading Desk</h1>
       <span id="mode" class="badge">…</span>
       <span id="halted" class="badge danger" hidden>HALTED</span>
+      <span id="frozen" class="badge danger" hidden>WALLET FROZEN</span>
     </div>
     <div class="kpis">
       <div class="kpi"><label>Total value</label><strong id="total">–</strong><small>PUSD</small></div>
@@ -22,6 +23,17 @@
   </header>
 
   <main>
+    <section class="panel span-2" id="walletpanel">
+      <div class="row"><h2>Live wallet</h2><span class="hint">Real money. The bots' own Bitcoin Cash wallet; the key is a Worker secret and never leaves it.</span></div>
+      <div id="wallet" class="hint">Loading…</div>
+      <div id="walletctl" class="row" hidden>
+        <button class="btn" data-act="halt">Halt buys</button>
+        <button class="btn" data-act="freeze">Freeze wallet</button>
+        <button class="btn primary" data-act="live">Go live</button>
+        <button class="btn" data-act="paper">Back to paper</button>
+      </div>
+    </section>
+
     <section class="panel span-2">
       <div class="row"><h2>Agents</h2><span id="runner" class="hint"></span></div>
       <div id="agents" class="agents"></div>

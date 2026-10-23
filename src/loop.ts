@@ -8,6 +8,7 @@ import { scorecard, sizeScale, type Scorecard } from "./scorecard";
 import { checkBuy, checkProvide, exitSignal, type Book, type Proposal, type TokenFacts } from "./risk";
 import { feeAprPct, lpCandidates, lpValue, openLps, provide, tendLps, withdraw } from "./lp";
 import { publishRoleStatus, refreshRoles } from "./roles";
+import { coinsFor, explorerTx, liveSwap, loadWallet, syncHoldings, balancesOf } from "./live";
 
 /*
  * A trading cycle has two halves:
@@ -110,27 +111,39 @@ export interface Ctx {
   buysToday: number;
   card: Scorecard;
   tvlDayAgo: Map<string, number>;
+  /** Real money: fills are on-chain swaps from the bots' wallet, holdings are what the chain says. */
+  live: boolean;
 }
 
 /** Load prices and the book. Used by every stage so decisions always see fresh data. */
 export async function loadCtx(env: Env, L: Ledger): Promise<Ctx> {
-  await ensureWallet(env, L);
+  const live = await L.live();
+  if (!live) await ensureWallet(env, L);
   const seeded = await seedKnowledge(env);
   if (seeded.length) await L.log("desk", "knowledge", `Knowledge defaults added or refreshed (owner edits are never touched): ${seeded.join(", ")}.`, { seeded });
   const RISK = await loadRiskLimits(env);
-  const halted = (await L.setting("halted")) === "1";
   const list = await topTokens(150);
   const held = await L.openPositions();
   const missing = held.map((p) => p.token_id).filter((id) => id !== "bch" && !list.some((t) => t.token_id === id));
   const tokens = new Map<string, TokenInfo>([...list, ...(await tokensByIds([PUSD, ...missing]))].map((t) => [t.token_id, t]));
   const prices = new Prices(tokens);
+  let halted = (await L.setting("halted")) === "1";
+  if (live) {
+    try {
+      await syncHoldings(env, L, prices, await coinsFor(env, L, await loadWallet(env)));
+    } catch (e) {
+      // Can't see the wallet: don't add risk on top of balances we can't confirm.
+      halted = true;
+      await L.log("kade", "alert", `Can't read the live wallet (${(e as Error).message}). No new buys until it can be read.`);
+    }
+  }
   const book = await bookOf(L, prices);
   const dayAgo = await L.valueAt(24 * 3600 * 1000);
   const dayChangePct = dayAgo ? ((book.total - dayAgo) / dayAgo) * 100 : 0;
   const card = scorecard(await L.closedSince(30 * 86400 * 1000), 30);
   const tvlDayAgo = await L.tvlAt(24 * 3600 * 1000);
   const buysToday = (await env.DB.prepare("SELECT COUNT(*) AS n FROM trades WHERE side = 'buy' AND ts >= ?").bind(Date.now() - 24 * 3600 * 1000).first<{ n: number }>())?.n ?? 0;
-  return { RISK, halted, tokens, list, prices, held, book, dayChangePct, buysToday, card, tvlDayAgo };
+  return { RISK, halted, tokens, list, prices, held, book, dayChangePct, buysToday, card, tvlDayAgo, live };
 }
 
 /** The code-only half: record the market, run stops and targets, snapshot the portfolio. */
@@ -147,8 +160,7 @@ export async function mechanical(env: Env, L: Ledger): Promise<Ctx> {
     }
     const reason = exitSignal(p.entry_price_pusd, now, p.target_pct, p.stop_pct);
     if (reason) {
-      await closePosition(L, prices, p, reason === "stop" ? "stop hit" : "target hit");
-      closed++;
+      if (await closePosition(L, prices, p, reason === "stop" ? "stop hit" : "target hit", ctx.RISK)) closed++;
     }
   }
   await tendLps(env, L, prices, ctx.RISK, ctx.tvlDayAgo);
@@ -215,6 +227,10 @@ export async function briefing(env: Env, ctx: Ctx) {
   const recentSentiment = (await env.DB.prepare("SELECT ts, subject, token_id, symbol, score, mentions, summary FROM sentiment WHERE ts >= ? ORDER BY ts DESC LIMIT 30").bind(Date.now() - 24 * 3600 * 1000).all()).results;
   const blindSince = (await env.DB.prepare("SELECT value FROM settings WHERE key = 'blind_since'").first<{ value: string }>())?.value;
   return {
+    mode: ctx.live ? "live" : "paper",
+    ...(ctx.live
+      ? { live_note: `LIVE: real money in the bots' own wallet. Every approved buy and sell is a real Cauldron swap. Live caps on top of the risk limits: at most ${ctx.RISK.liveMaxTradePusd} PUSD per buy and ${ctx.RISK.liveMaxDailyBuyPusd} PUSD of buys per 24h. Liquidity providing is paper-only for now, so don't propose "provide". Fees and price impact are real: prefer fewer, better trades.` }
+      : {}),
     bch_usd: round(prices.bchPusd),
     halted: ctx.halted,
     desk_was_blind_since: blindSince ? Number(blindSince) : null,
@@ -344,21 +360,29 @@ export async function decideAndExecute(env: Env, L: Ledger, ctx: Ctx, kade: Verd
   for (const p of approved.slice(0, ctx.RISK.maxTradesPerCycle)) {
     await L.status("rune", `executing ${p.action} ${p.symbol}`);
     if (p.action === "sell") {
-      for (const h of ctx.held.filter((x) => x.token_id === p.token_id)) fills.push(await closePosition(L, ctx.prices, h, `Vela exit: ${p.thesis}`));
-      await L.updateProposal(p.id, { status: "filled" });
+      let ok = true;
+      for (const h of ctx.held.filter((x) => x.token_id === p.token_id)) {
+        const f = await closePosition(L, ctx.prices, h, `Vela exit: ${p.thesis}`, ctx.RISK);
+        if (f) fills.push(f);
+        else ok = false;
+      }
+      await L.updateProposal(p.id, ok ? { status: "filled" } : { status: "skipped", decision_note: "the on-chain sell did not go through; see the activity log" });
     } else if (p.action === "withdraw") {
       for (const x of (await openLps(env)).filter((y) => y.token_id === p.token_id)) {
         const f = await withdraw(L, ctx.prices, x, `Vela withdraw: ${p.thesis}`);
         if (f) fills.push(f);
       }
       await L.updateProposal(p.id, { status: "filled" });
+    } else if (p.action === "provide" && ctx.live) {
+      await L.log("rune", "skip", `Skipped adding liquidity to ${p.symbol}: liquidity providing is paper-only until live pools are built.`);
+      await L.updateProposal(p.id, { status: "skipped", decision_note: "liquidity providing is paper-only in live mode" });
     } else if (p.action === "provide") {
       const fill = await provide(L, ctx.prices, p, p.allowed_pusd, ctx.RISK);
       await L.updateProposal(p.id, fill ? { status: "filled" } : { status: "skipped", decision_note: "price impact too high at execution" });
       if (fill) fills.push(fill);
     } else {
       const fill = await openPosition(L, ctx.prices, p, p.allowed_pusd, ctx.RISK);
-      await L.updateProposal(p.id, fill ? { status: "filled", position_id: fill.position_id } : { status: "skipped", decision_note: "price impact too high at execution" });
+      await L.updateProposal(p.id, fill ? { status: "filled", position_id: fill.position_id } : { status: "skipped", decision_note: "not filled at execution; see the activity log" });
       if (fill) fills.push(fill);
     }
   }
@@ -530,6 +554,7 @@ export async function runJournal(env: Env): Promise<void> {
 async function saveMarks(L: Ledger, prices: Prices) {
   const after = await bookOf(L, prices);
   await L.snapshot(after.total, prices.bchPusd);
+  if ((await L.live()) && !(await L.setting("live_start_pusd"))) await L.setSetting("live_start_pusd", String(round(after.total)));
   const marks: Record<string, number> = { bch: prices.bchPusd };
   for (const h of await L.holdings()) {
     const p = prices.tokenPusd(h.asset);
@@ -566,36 +591,103 @@ function rugLine(symbol: string, f: TokenFacts, RISK: RiskLimits) {
 }
 
 async function openPosition(L: Ledger, prices: Prices, p: Proposal, sizePusd: number, RISK: RiskLimits) {
+  const live = await L.live();
+  const symbol = p.token_id === "bch" ? "BCH" : p.symbol;
+  if (live) {
+    // Real money: the live caps sit on top of every other limit.
+    const spent = (await L.env.DB.prepare("SELECT COALESCE(SUM(pusd), 0) AS s FROM trades WHERE mode = 'live' AND side = 'buy' AND ts >= ?").bind(Date.now() - 86400000).first<{ s: number }>())?.s ?? 0;
+    const capped = Math.min(sizePusd, RISK.liveMaxTradePusd, RISK.liveMaxDailyBuyPusd - spent);
+    if (capped < RISK.minTradePusd) {
+      await L.log("rune", "skip", `Skipped live buy ${symbol}: ${round(spent)} of the ${RISK.liveMaxDailyBuyPusd} PUSD daily live buy limit already used.`);
+      return null;
+    }
+    if (capped < sizePusd) await L.log("rune", "risk", `Live buy ${symbol} cut from ${round(sizePusd)} to ${round(capped)} PUSD by the live limits.`);
+    sizePusd = capped;
+  }
   const pusdUnits = Math.floor(sizePusd * 100);
   const fill = await simulateSwap(PUSD, p.token_id, pusdUnits, prices);
   if (fill.impactPct > RISK.maxPriceImpactPct || fill.amountOut <= 0) {
     await L.log("rune", "skip", `Skipped buy ${p.symbol}: price impact ${fill.impactPct.toFixed(2)}% over ${RISK.maxPriceImpactPct}% limit.`, fill);
     return null;
   }
-  const symbol = p.token_id === "bch" ? "BCH" : p.symbol;
-  await L.adjust("pusd", "PUSD", -pusdUnits);
-  await L.adjust(p.token_id, symbol, fill.amountOut);
-  const whole = fill.amountOut / 10 ** prices.decimals(p.token_id);
+  let amountOut = fill.amountOut;
+  let costPusd = sizePusd;
+  let txid: string | undefined;
+  if (live) {
+    if (fill.estimated) {
+      await L.log("rune", "skip", `Skipped live buy ${symbol}: no router quote or pool reserves to check the price against.`, fill);
+      return null;
+    }
+    try {
+      const r = await liveSwap(L.env, L, RISK, { sell: PUSD, buy: p.token_id, amount: BigInt(pusdUnits), expectedOut: BigInt(fill.amountOut) });
+      amountOut = Number(r.bought);
+      costPusd = Number(r.sold) / 100;
+      txid = r.txid;
+      await syncHoldings(L.env, L, prices, await coinsFor(L.env, L, await loadWallet(L.env)));
+    } catch (e) {
+      await L.log("rune", "error", `LIVE BUY ${symbol} not done, nothing was signed or it was rejected: ${(e as Error).message}`, { proposal: p.id });
+      return null;
+    }
+  } else {
+    await L.adjust("pusd", "PUSD", -pusdUnits);
+    await L.adjust(p.token_id, symbol, fill.amountOut);
+  }
+  const whole = amountOut / 10 ** prices.decimals(p.token_id);
   const positionId = await L.openPosition({
-    token_id: p.token_id, symbol, horizon: p.horizon, amount: fill.amountOut, cost_pusd: sizePusd,
-    entry_price_pusd: sizePusd / whole, target_pct: p.target_pct, stop_pct: p.stop_pct, signal: p.signal ?? null, thesis: p.thesis,
+    token_id: p.token_id, symbol, horizon: p.horizon, amount: amountOut, cost_pusd: costPusd,
+    entry_price_pusd: costPusd / whole, target_pct: p.target_pct, stop_pct: p.stop_pct, signal: p.signal ?? null, thesis: p.thesis,
   });
-  await L.recordTrade({ side: "buy", token_id: p.token_id, symbol, amount: fill.amountOut, pusd: sizePusd, price_pusd: sizePusd / whole, impact_pct: fill.impactPct, estimated: fill.estimated, position_id: positionId, reason: p.thesis });
-  await L.log("rune", "fill", `PAPER BUY ${round(whole, 4)} ${symbol} for ${round(sizePusd)} PUSD (impact ${fill.impactPct.toFixed(2)}%${fill.estimated ? ", estimated" : ""}${fill.reservePriced ? ", pool reserves" : ""}). Target +${p.target_pct}%, stop -${p.stop_pct}%.`, fill);
-  return { side: "buy", symbol, pusd: round(sizePusd), amount: fill.amountOut, impact_pct: round(fill.impactPct), estimated: fill.estimated, position_id: positionId };
+  await L.recordTrade({ side: "buy", token_id: p.token_id, symbol, amount: amountOut, pusd: costPusd, price_pusd: costPusd / whole, impact_pct: fill.impactPct, estimated: !live && fill.estimated, position_id: positionId, reason: p.thesis, txid });
+  const how = live ? `LIVE BUY ${round(whole, 4)} ${symbol} for ${round(costPusd)} PUSD, tx ${explorerTx(txid!)}` : `PAPER BUY ${round(whole, 4)} ${symbol} for ${round(costPusd)} PUSD`;
+  await L.log("rune", "fill", `${how} (impact ${fill.impactPct.toFixed(2)}%${fill.estimated ? ", estimated" : ""}${fill.reservePriced ? ", pool reserves" : ""}). Target +${p.target_pct}%, stop -${p.stop_pct}%.`, { ...fill, txid });
+  return { side: "buy", symbol, pusd: round(costPusd), amount: amountOut, impact_pct: round(fill.impactPct), estimated: !live && fill.estimated, position_id: positionId, txid };
 }
 
-async function closePosition(L: Ledger, prices: Prices, pos: Position, reason: string) {
-  const fill = await simulateSwap(pos.token_id, PUSD, pos.amount, prices);
-  const outPusd = fill.amountOut / 100;
-  await L.adjust(pos.token_id, pos.symbol, -pos.amount);
-  await L.adjust("pusd", "PUSD", fill.amountOut);
+/** Sell a position back to PUSD. Returns null when a live sell didn't go through (the position stays open). */
+async function closePosition(L: Ledger, prices: Prices, pos: Position, reason: string, RISK: RiskLimits) {
+  const live = await L.live();
+  let amount = pos.amount;
+  if (live) {
+    try {
+      const bal = balancesOf(await coinsFor(L.env, L, await loadWallet(L.env)));
+      const have = Number(bal.get(pos.token_id) ?? 0n) - (pos.token_id === "bch" ? RISK.liveBchReserveSats : 0);
+      amount = Math.min(pos.amount, Math.max(0, have));
+    } catch (e) {
+      await L.log("rune", "error", `LIVE SELL ${pos.symbol} (${reason}) not done: can't read the wallet: ${(e as Error).message}`, { position_id: pos.id });
+      return null;
+    }
+    if (amount <= 0) {
+      await L.log("kade", "alert", `${pos.symbol} position ${pos.id} is not in the live wallet any more. Closing it at zero; check the wallet.`, { position_id: pos.id });
+      await L.closePosition(pos.id, 0, `${reason}; tokens not found in the wallet`);
+      return { side: "sell", symbol: pos.symbol, pusd: 0, pnl_pusd: round(-pos.cost_pusd), position_id: pos.id };
+    }
+  }
+  const fill = await simulateSwap(pos.token_id, PUSD, amount, prices);
+  let outPusd = fill.amountOut / 100;
+  let txid: string | undefined;
+  if (live) {
+    try {
+      // A stop is a way out, not a price target: give it twice the usual slippage room.
+      const slippagePct = reason === "stop hit" ? RISK.liveSlippagePct * 2 : RISK.liveSlippagePct;
+      const r = await liveSwap(L.env, L, RISK, { sell: pos.token_id, buy: PUSD, amount: BigInt(amount), expectedOut: BigInt(fill.amountOut), slippagePct });
+      outPusd = Number(r.bought) / 100;
+      txid = r.txid;
+      await syncHoldings(L.env, L, prices, await coinsFor(L.env, L, await loadWallet(L.env)));
+    } catch (e) {
+      await L.log("rune", "error", `LIVE SELL ${pos.symbol} (${reason}) not done, the position stays open: ${(e as Error).message}`, { position_id: pos.id });
+      return null;
+    }
+  } else {
+    await L.adjust(pos.token_id, pos.symbol, -pos.amount);
+    await L.adjust("pusd", "PUSD", fill.amountOut);
+  }
   await L.closePosition(pos.id, outPusd, reason);
   const pnl = outPusd - pos.cost_pusd;
-  const whole = pos.amount / 10 ** prices.decimals(pos.token_id);
-  await L.recordTrade({ side: "sell", token_id: pos.token_id, symbol: pos.symbol, amount: pos.amount, pusd: outPusd, price_pusd: whole ? outPusd / whole : 0, impact_pct: fill.impactPct, estimated: fill.estimated, position_id: pos.id, reason });
-  await L.log("rune", "fill", `PAPER SELL ${pos.symbol} for ${round(outPusd)} PUSD, ${pnl >= 0 ? "+" : ""}${round(pnl)} PUSD (${round((pnl / pos.cost_pusd) * 100, 1)}%). ${reason}${fill.reservePriced ? " (priced from pool reserves)" : ""}.`, { ...fill, pnl });
-  return { side: "sell", symbol: pos.symbol, pusd: round(outPusd), pnl_pusd: round(pnl), position_id: pos.id };
+  const whole = amount / 10 ** prices.decimals(pos.token_id);
+  await L.recordTrade({ side: "sell", token_id: pos.token_id, symbol: pos.symbol, amount, pusd: outPusd, price_pusd: whole ? outPusd / whole : 0, impact_pct: fill.impactPct, estimated: !live && fill.estimated, position_id: pos.id, reason, txid });
+  const how = live ? `LIVE SELL ${pos.symbol} for ${round(outPusd)} PUSD, tx ${explorerTx(txid!)}` : `PAPER SELL ${pos.symbol} for ${round(outPusd)} PUSD`;
+  await L.log("rune", "fill", `${how}, ${pnl >= 0 ? "+" : ""}${round(pnl)} PUSD (${round((pnl / pos.cost_pusd) * 100, 1)}%). ${reason}${!live && fill.reservePriced ? " (priced from pool reserves)" : ""}.`, { ...fill, pnl, txid });
+  return { side: "sell", symbol: pos.symbol, pusd: round(outPusd), pnl_pusd: round(pnl), position_id: pos.id, txid };
 }
 
 async function bookOf(L: Ledger, prices: Prices) {

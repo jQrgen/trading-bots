@@ -5,6 +5,7 @@ export const BCH_DECIMALS = 8;
 export const INDEXER = "https://indexer.riften.net/cauldron";
 export const ROUTER_WS = "https://router.riften.net/v1/route";
 export const ROUTER_FEE = 0.001;
+export const BROADCAST = "https://broadcast.cauldron.quest/broadcast";
 
 export type Horizon = "short" | "medium" | "long";
 
@@ -38,6 +39,12 @@ export const RISK_DEFAULTS = {
   lpStopPct: 25, // withdraw if pool value plus fees falls this far below the deposit
   lpDrainExitPct: 40, // withdraw if the token's liquidity drops this much in 24h (others are pulling out)
   minLpFeeAprPct: 10, // estimated fee APR must at least pay for the setup costs and the risk
+  // Live mode only (real money). PUSD trades ~$20k a day, so start small and let results earn bigger sizes.
+  liveMaxTradePusd: 25, // hard cap per buy, on top of every limit above
+  liveMaxDailyBuyPusd: 150, // total buys in any 24h
+  liveSlippagePct: 3, // the signed transaction must deliver at least the quote minus this, or nothing is signed
+  liveBchReserveSats: 200000, // 0.002 BCH always kept for network fees, never traded
+  liveMaxFeeSats: 20000, // most BCH one swap may spend on miner and router fees
 };
 
 /** Fees for PUSD -> BCH -> token -> BCH -> PUSD: four hops at 0.3% pool + 0.1% router. */
@@ -59,4 +66,10 @@ export interface Env {
   INDEXER_URL?: string;
   ROUTER_URL?: string;
   XAI_BASE_URL?: string;
+  BROADCAST_URL?: string;
+  // Live trading (see src/live.ts). The wallet secret is a Worker secret, synced from GitHub on deploy.
+  WALLET_SEED?: string; // BIP39 seed phrase of the bots' dedicated wallet
+  WALLET_WIF?: string; // or a single WIF private key
+  WALLET_PATH?: string; // derivation path for WALLET_SEED, default m/44'/145'/0'/0/0
+  ELECTRUM_SERVERS?: string; // "host:port,host:port" Fulcrum servers (TLS) for the wallet's coins
 }
