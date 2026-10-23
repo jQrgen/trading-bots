@@ -5,7 +5,7 @@ import { botKey, checkBotToken, handleBot } from "./bot";
 import GROK_BOT from "../GROK_BOT.md";
 import { loadKnowledge, parseRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
 import { describeRoles } from "./roles";
-import { dryRunSwap, goLive, goPaper, modeOf, setFrozen, walletInfo } from "./live";
+import { dryRunSwap, goLive, goPaper, modeOf, netDeposits, setFrozen, walletInfo } from "./live";
 import { Ledger } from "./ledger";
 import { PUSD } from "./config";
 
@@ -248,6 +248,7 @@ async function state(env: Env) {
     db.prepare("SELECT ts, total_pusd FROM snapshots ORDER BY ts DESC LIMIT 1").first<{ ts: number; total_pusd: number }>(),
   ]);
   const s = Object.fromEntries(settings.results.map((r) => [r.key, r.value]));
+  const deposits = s.mode === "live" ? await netDeposits(env).catch(() => 0) : 0;
   const roles = await describeRoles(env).catch(() => null);
   const marks = s.marks ? (JSON.parse(s.marks) as { prices: Record<string, number>; decimals: Record<string, number>; bch_pusd: number; ts: number }) : null;
   const value = (asset: string, amount: number) =>
@@ -259,7 +260,9 @@ async function state(env: Env) {
     halted: s.halted === "1",
     frozen: s.frozen === "1",
     live_since: s.live_since ? Number(s.live_since) : null,
-    start_pusd: s.mode === "live" ? (Number(s.live_start_pusd) || null) : Number(env.PAPER_START_PUSD),
+    // Live P&L is measured against the starting value plus the owner's net deposits since.
+    start_pusd: s.mode === "live" ? (Number(s.live_start_pusd) ? Number(s.live_start_pusd) + deposits : null) : Number(env.PAPER_START_PUSD),
+    deposits_pusd: s.mode === "live" ? deposits : 0,
     total_pusd: last?.total_pusd ?? null,
     updated_at: last?.ts ?? null,
     bch_pusd: marks?.bch_pusd ?? null,

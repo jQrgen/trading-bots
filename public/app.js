@@ -40,7 +40,7 @@ async function loadState() {
   const pnl = s.total_pusd == null || !s.start_pusd ? null : s.total_pusd - s.start_pusd;
   $("pnl").textContent = pnl == null ? "–" : signed(pnl);
   $("pnl").className = cls(pnl);
-  $("pnlpct").textContent = pnl == null ? "" : signed((pnl / s.start_pusd) * 100, 1) + "%";
+  $("pnlpct").textContent = pnl == null ? "" : signed((pnl / s.start_pusd) * 100, 1) + "%" + (s.deposits_pusd ? ` · ${fmt(s.deposits_pusd)} deposited` : "");
   $("winrate").textContent = s.stats.win_rate == null ? "–" : fmt(s.stats.win_rate * 100, 0) + "%";
   $("closed").textContent = `${s.stats.wins}/${s.stats.closed} trades`;
   $("bch").textContent = fmt(s.bch_pusd);

@@ -1,4 +1,4 @@
-import { activePools, broadcastTx, routerBuild, symbolOf } from "./cauldron";
+import { activePools, broadcastTx, routerBuild, symbolOf, tokensByIds } from "./cauldron";
 import { PUSD, type Env, type RiskLimits } from "./config";
 import { DEFAULT_SERVERS, electrum, listUnspent } from "./chain/electrum";
 import { bytesToHex, decodeTx, txidOf } from "./chain/tx";
@@ -6,7 +6,7 @@ import { buildPoolSwap, poolScript, type PoolCoin } from "./chain/pools";
 import { fundingFor, swap, type BuildResult, type Coin, type SwapResult } from "./chain/swap";
 import { scripthash, walletFrom, type Wallet } from "./chain/wallet";
 import type { Ledger } from "./ledger";
-import type { Prices } from "./market";
+import { Prices } from "./market";
 
 /*
  * Live mode: real swaps on Cauldron from the bots' own hot wallet.
@@ -71,8 +71,57 @@ export async function coinsFor(env: Env, L: Ledger, w: Wallet, fresh = false): P
   if (!c) {
     c = await fetchCoins(env, w);
     cycleCoins.set(L, c);
+    await reconcileCapital(env, c).catch((e: Error) => console.log(`capital flows: ${e.message}`));
   }
   return c;
+}
+
+const outpoint = (c: { txid: string; vout: number }) => `${c.txid}:${c.vout}`;
+
+/**
+ * Deposits and withdrawals the desk didn't make. Every coin the wallet holds is remembered; a new coin
+ * that no desk transaction created is a deposit, and a remembered coin that is gone without a desk swap
+ * spending it is a withdrawal. Each is valued in PUSD when seen, so P&L counts only trading results.
+ */
+export async function reconcileCapital(env: Env, coins: Coin[]) {
+  if ((await modeOf(env)) !== "live") return;
+  const known = new Map(
+    (await env.DB.prepare("SELECT outpoint, txid, sats, asset, amount FROM wallet_coins").all<{ outpoint: string; txid: string; sats: number; asset: string | null; amount: string | null }>()).results.map((r) => [r.outpoint, r]),
+  );
+  const desk = new Set((await env.DB.prepare("SELECT DISTINCT txid FROM trades WHERE txid IS NOT NULL").all<{ txid: string }>()).results.map((r) => r.txid));
+  const now = new Set(coins.map(outpoint));
+  const fresh = coins.filter((c) => !known.has(outpoint(c)));
+  const gone = [...known.values()].filter((r) => !now.has(r.outpoint));
+  const deposits = fresh.filter((c) => !desk.has(c.txid));
+  if (!fresh.length && !gone.length) return;
+  let prices: Prices | null = null;
+  if (deposits.length || gone.length) {
+    const ids = [...new Set([PUSD, ...deposits.flatMap((c) => (c.token ? [c.token.category] : [])), ...gone.flatMap((r) => (r.asset ? [r.asset] : []))])];
+    prices = new Prices(new Map((await tokensByIds(ids)).map((t) => [t.token_id, t])));
+  }
+  const worth = (sats: number, asset: string | null, amount: number) => prices!.value("bch", sats) + (asset ? prices!.value(asset, amount) : 0);
+  const ts = Date.now();
+  const flow = env.DB.prepare("INSERT INTO capital_flows (ts, kind, outpoint, asset, amount, pusd) VALUES (?, ?, ?, ?, ?, ?)");
+  const stmts = [
+    ...gone.map((r) => env.DB.prepare("DELETE FROM wallet_coins WHERE outpoint = ?").bind(r.outpoint)),
+    // Desk swaps forget the coins they spend (forgetSpent), so whatever else vanished left the wallet.
+    ...gone.map((r) => flow.bind(ts, "withdrawal", r.outpoint, r.asset ?? "bch", r.asset ? (r.amount ?? "0") : String(r.sats), -worth(r.sats, r.asset, Number(r.amount ?? 0)))),
+    ...fresh.map((c) => env.DB.prepare("INSERT OR IGNORE INTO wallet_coins (outpoint, txid, sats, asset, amount) VALUES (?, ?, ?, ?, ?)").bind(outpoint(c), c.txid, Number(c.value), c.token?.category ?? null, c.token ? c.token.amount.toString() : null)),
+    ...deposits.map((c) => flow.bind(ts, "deposit", outpoint(c), c.token?.category ?? "bch", c.token ? c.token.amount.toString() : c.value.toString(), worth(Number(c.value), c.token?.category ?? null, Number(c.token?.amount ?? 0)))),
+  ];
+  for (const c of deposits) stmts.push(event(env, `Owner deposit seen: ${c.token ? `${c.token.amount} units of ${c.token.category === PUSD ? "PUSD" : c.token.category.slice(0, 8)}` : `${Number(c.value) / 1e8} BCH`} (${explorerTx(c.txid)}). Counted as capital, not profit.`));
+  for (const r of gone) stmts.push(event(env, `Coin ${r.outpoint.slice(0, 12)}… left the wallet without a desk trade. Counted as a withdrawal.`));
+  await env.DB.batch(stmts);
+}
+
+/** A desk swap spent these coins: forget them so they aren't taken for a withdrawal. */
+async function forgetSpent(env: Env, spent: Coin[]) {
+  if (spent.length) await env.DB.batch(spent.map((c) => env.DB.prepare("DELETE FROM wallet_coins WHERE outpoint = ?").bind(outpoint(c))));
+}
+
+/** Net capital the owner has put in since going live, in PUSD at the time of each flow. */
+export async function netDeposits(env: Env): Promise<number> {
+  return (await env.DB.prepare("SELECT COALESCE(SUM(pusd), 0) AS n FROM capital_flows").first<{ n: number }>())?.n ?? 0;
 }
 
 /** Make the holdings table match the chain. */
@@ -163,6 +212,7 @@ export async function liveSwap(
     },
   };
   const r = await swap(w, coins, { sell, buy, amount: o.amount, minOutput, maxFeeSats: BigInt(o.maxFeeSats ?? RISK.liveMaxFeeSats) }, deps);
+  await forgetSpent(env, r.spent).catch(() => undefined);
   const spent = new Set(r.spent.map((c) => `${c.txid}:${c.vout}`));
   cycleCoins.set(L, [...coins.filter((c) => !spent.has(`${c.txid}:${c.vout}`)), ...r.created]);
   return { ...r, verified: true };
@@ -218,6 +268,8 @@ export async function goLive(env: Env, RISK: RiskLimits): Promise<{ ok: boolean;
     env.DB.prepare("UPDATE lp_positions SET status = 'archived', closed_at = ?, close_reason = 'paper book archived when the desk went live' WHERE status = 'open'").bind(now),
     env.DB.prepare("DELETE FROM holdings"),
     env.DB.prepare("DELETE FROM settings WHERE key IN ('live_start_pusd', 'frozen')"),
+    env.DB.prepare("DELETE FROM wallet_coins"),
+    env.DB.prepare("DELETE FROM capital_flows"),
     put(env, "live_since", String(now)),
     put(env, "mode", "live"),
     event(env, `Owner switched the desk to LIVE trading with wallet ${w.address}. The paper book is archived. Real swaps from the next decision on.`),

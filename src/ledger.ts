@@ -135,7 +135,10 @@ export class Ledger {
       .prepare("SELECT total_pusd FROM snapshots WHERE ts <= ? AND mode = ? ORDER BY ts DESC LIMIT 1")
       .bind(Date.now() - msAgo, await this.mode())
       .first<{ total_pusd: number }>();
-    return row?.total_pusd ?? null;
+    if (!row || msAgo <= 0) return row?.total_pusd ?? null;
+    // Shift the past value by the owner's deposits and withdrawals since, so they don't read as gains or losses.
+    const flows = await this.db.prepare("SELECT COALESCE(SUM(pusd), 0) AS n FROM capital_flows WHERE ts > ?").bind(Date.now() - msAgo).first<{ n: number }>().catch(() => null);
+    return row.total_pusd + (flows?.n ?? 0);
   }
 
   async setting(key: string): Promise<string | null> {
