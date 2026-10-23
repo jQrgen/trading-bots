@@ -16,6 +16,8 @@ const pools: PoolCoin[] = [
   { txid: "a2".repeat(32), vout: 0, sats: 14_406_539n, tokens: 5289n, category: PUSD, pkh: "bb".repeat(20) },
   { txid: "a3".repeat(32), vout: 1, sats: 12_369_167n, tokens: 4541n, category: PUSD, pkh: "cc".repeat(20) },
 ];
+const TOK = "77".repeat(32);
+pools.push({ txid: "a4".repeat(32), vout: 2, sats: 50_000_000n, tokens: 9_000_000n, category: TOK, pkh: "dd".repeat(20) });
 const coins: Coin[] = [
   { txid: "01".repeat(32), vout: 0, value: 1000n, token: { category: PUSD, amount: 2000n } },
   { txid: "02".repeat(32), vout: 1, value: 17_498_425n },
@@ -40,7 +42,7 @@ function signAndCheck(sell: string, buy: string, amount: bigint) {
   const d = verifyBuild(tx, b.inputs_to_sign, ours, w.script, { sell, buy, amount, minOutput: 1n, maxFeeSats: 5000n });
   const spent: Output[] = tx.inputs.map((i) => {
     const p = pools.find((x) => x.txid === i.txid && x.vout === i.vout);
-    if (p) return { value: p.sats, script: poolScript(p.pkh), token: { category: PUSD, amount: p.tokens } };
+    if (p) return { value: p.sats, script: poolScript(p.pkh), token: { category: p.category, amount: p.tokens } };
     const c = ours.get(`${i.txid}:${i.vout}`)!;
     return { value: c.value, script: w.script, ...(c.token ? { token: c.token } : {}) };
   });
@@ -68,6 +70,16 @@ describe("direct Cauldron pool swaps", () => {
     expect(d.get(PUSD)).toBe(-1500n);
     expect(d.get("bch")! > 0n).toBe(true);
     expect(BigInt(b.expected_output)).toBeGreaterThan(d.get("bch")!);
+  });
+
+  it("swaps token to token through BCH in one transaction the pool contracts accept", () => {
+    const { b, d, spent, hex } = signAndCheck(PUSD, TOK, 1500n);
+    expect(vmAccepts(hex, spent)).toBe(true);
+    expect(d.get(PUSD)).toBe(-1500n);
+    expect(d.get(TOK)).toBe(BigInt(b.expected_output));
+    expect(d.get(TOK)! > 0n).toBe(true);
+    expect(-d.get("bch")!).toBeLessThan(5000n); // only the fee and dust
+    expect(JSON.stringify(b.route)).toContain('"hops":2');
   });
 
   it("is refused by the contract when it takes one token too many", () => {
