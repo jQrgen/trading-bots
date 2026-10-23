@@ -1,7 +1,7 @@
 import { broadcastTx, routerBuild, symbolOf } from "./cauldron";
 import { PUSD, type Env, type RiskLimits } from "./config";
 import { DEFAULT_SERVERS, electrum, listUnspent } from "./chain/electrum";
-import { decodeTx, txidOf } from "./chain/tx";
+import { bytesToHex, decodeTx, txidOf } from "./chain/tx";
 import { swap, type BuildResult, type Coin, type SwapResult } from "./chain/swap";
 import { scripthash, walletFrom, type Wallet } from "./chain/wallet";
 import type { Ledger } from "./ledger";
@@ -210,4 +210,49 @@ export async function setFrozen(env: Env, frozen: boolean) {
     put(env, "frozen", frozen ? "1" : "0"),
     event(env, frozen ? "Owner FROZE the live wallet: no on-chain transactions at all, stops included." : "Owner unfroze the live wallet."),
   ]);
+}
+
+/**
+ * Diagnostics for the owner: build, verify and sign a swap exactly like a live trade, but never broadcast it.
+ * Reports every input the transaction spends and whether the network (via Fulcrum) knows that coin.
+ */
+export async function dryRunSwap(env: Env, L: Ledger, RISK: RiskLimits, o: { sell: string; buy: string; amount: bigint }) {
+  const w = await loadWallet(env);
+  const coins = await coinsFor(env, L, w, true);
+  let built: BuildResult | null = null;
+  let signed = "";
+  let verdict = "signed (not broadcast)";
+  try {
+    await swap(w, coins, { sell: o.sell, buy: o.buy, amount: o.amount, minOutput: 0n, maxFeeSats: BigInt(RISK.liveMaxFeeSats) + o.amount / 100n }, {
+      build: async (p) => (built = await routerBuild<BuildResult>(p)),
+      broadcast: async (hex) => {
+        signed = hex;
+        throw new Error("dry run: not broadcast");
+      },
+    });
+  } catch (e) {
+    if (!signed) verdict = `failed before signing: ${(e as Error).message}`;
+  }
+  const b = built as BuildResult | null;
+  if (!b) return { verdict, coins: coins.length };
+  const tx = decodeTx(signed || b.unsigned_tx_hex);
+  const mine = new Set(coins.map((c) => `${c.txid}:${c.vout}`));
+  const inputs = [];
+  for (const i of tx.inputs) {
+    const utxo = await electrum(servers(env), "blockchain.utxo.get_info", [i.txid, i.vout]).catch((e: Error) => ({ error: e.message }));
+    const parent = await electrum(servers(env), "blockchain.transaction.get", [i.txid]).then(() => true, () => false);
+    inputs.push({ txid: i.txid, vout: i.vout, ours: mine.has(`${i.txid}:${i.vout}`), parent_tx_known: parent, utxo });
+  }
+  return {
+    verdict,
+    route: b.route,
+    expected_output: b.expected_output,
+    fee_sats: b.fee_sats,
+    fee_token_amount: b.fee_token_amount,
+    miner_fee_sats: b.miner_fee_sats,
+    inputs_to_sign: b.inputs_to_sign,
+    inputs,
+    outputs: tx.outputs.map((x) => ({ value: x.value.toString(), script: bytesToHex(x.script), token: x.token ? { category: x.token.category, amount: x.token.amount.toString(), nft: !!x.token.nft } : null })),
+    unsigned_tx_hex: b.unsigned_tx_hex,
+  };
 }

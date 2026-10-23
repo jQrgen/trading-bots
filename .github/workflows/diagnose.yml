@@ -1,0 +1,22 @@
+# Manual check of the live swap path: build, verify and sign a small swap WITHOUT broadcasting it,
+# and print what the network knows about every coin it would spend. Never moves funds.
+name: Diagnose live swap
+
+on:
+  workflow_dispatch:
+    inputs:
+      sell: { description: "bch or token category", default: "bch" }
+      buy: { description: "bch or token category (default PUSD)", default: "2469acc5afa4b10cb5b5c04afb89c3a3ffd61c5da9c01e26d00951cae2a02544" }
+      amount: { description: "base units of the sold asset", default: "100000" }
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dry-run swap on the desk
+        env:
+          DESK_URL: ${{ vars.DESK_URL || 'https://cauldron-trading-desk.nordiccrypto.workers.dev' }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          BODY=$(jq -n --arg sell "${{ inputs.sell }}" --arg buy "${{ inputs.buy }}" --arg amount "${{ inputs.amount }}" '{sell: $sell, buy: $buy, amount: $amount}')
+          curl -sS -X POST "$DESK_URL/api/admin/dry-swap" -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" --data "$BODY" | jq .
