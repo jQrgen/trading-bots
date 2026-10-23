@@ -121,7 +121,13 @@ async function loadTrades() {
 }
 
 async function loadJournal() {
-  const [j, l] = await Promise.all([get("/api/journal"), get("/api/lessons")]);
+  const [j, l, r] = await Promise.all([get("/api/journal"), get("/api/lessons"), get("/api/reviews")]);
+  $("reviews").innerHTML = r.length
+    ? `<h2 class="mt">Trade reviews</h2><table><tr><th>Trade</th><th>Process</th><th class="num">Outcome</th></tr>${r
+        .slice(0, 8)
+        .map((x) => `<tr title="${esc(x.finding)}"><td>${esc(x.symbol)} <small class="hint">${ago(x.ts)}</small></td><td><span class="chip ${x.process === "clean" ? "approved" : x.process === "major" ? "rejected" : "skipped"}">${esc(x.process)}</span></td><td class="num ${cls(x.outcome_pusd)}">${signed(x.outcome_pusd)}${x.outcome_r != null ? ` <small class="hint">${signed(x.outcome_r, 1)}R</small>` : ""}</td></tr>`)
+        .join("")}</table>`
+    : "";
   $("journal").innerHTML = j.length
     ? j.slice(0, 5).map((e) => `<div class="journal-entry"><time>${new Date(e.ts).toLocaleDateString()}</time>${esc(e.text)}</div>`).join("")
     : `<p class="empty">Zara writes the first journal entry tonight.</p>`;

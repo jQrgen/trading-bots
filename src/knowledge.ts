@@ -2,6 +2,7 @@ import { RISK_DEFAULTS, type Env, type RiskLimits } from "./config";
 import SHARED from "../seed/SHARED.md";
 import MARKET from "../seed/MARKET.md";
 import STRATEGY from "../seed/STRATEGY.md";
+import PLAYBOOK from "../seed/PLAYBOOK.md";
 import NOVA from "../seed/roles/nova.md";
 import ORIN from "../seed/roles/orin.md";
 import VELA from "../seed/roles/vela.md";
@@ -18,6 +19,7 @@ export const SEED: Doc[] = [
   { key: "risk-limits", title: "Hard risk limits", kind: "limits", format: "json", body: JSON.stringify(RISK_DEFAULTS, null, 2) },
   { key: "market", title: "Market notes: Cauldron DEX", kind: "market", format: "markdown", body: MARKET },
   { key: "shared", title: "Shared rules", kind: "rules", format: "markdown", body: SHARED },
+  { key: "playbook", title: "Desk playbook (from HyperGrok, scaled to Cauldron)", kind: "rules", format: "markdown", body: PLAYBOOK },
   { key: "team", title: "Team graph", kind: "team", format: "json", body: JSON.stringify(TEAM, null, 2) },
   { key: "role:nova", title: "Nova: head trader", kind: "role", format: "markdown", body: NOVA },
   { key: "role:orin", title: "Orin: market scanner", kind: "role", format: "markdown", body: ORIN },
@@ -27,12 +29,19 @@ export const SEED: Doc[] = [
   { key: "role:zara", title: "Zara: journal and alerts", kind: "role", format: "markdown", body: ZARA },
 ];
 
-/** Insert seed docs whose key doesn't exist yet. Never overwrites. Returns the titles added. */
+/**
+ * Insert seed docs whose key doesn't exist yet, and refresh docs nobody has edited since they were seeded
+ * (latest version written by "seed") when the repo's default changes. Anything the owner or a bot edited is never touched.
+ * Returns the titles added or refreshed.
+ */
 export async function seedKnowledge(env: Env): Promise<string[]> {
-  const have = new Set((await env.DB.prepare("SELECT key FROM knowledge").all<{ key: string }>()).results.map((r) => r.key));
-  const missing = SEED.filter((d) => !have.has(d.key));
-  for (const d of missing) await saveKnowledge(env, d.key, d.body, "seed");
-  return missing.map((d) => d.title);
+  const have = new Map((await env.DB.prepare("SELECT key, body, updated_by FROM knowledge").all<{ key: string; body: string; updated_by: string }>()).results.map((r) => [r.key, r]));
+  const changed = SEED.filter((d) => {
+    const cur = have.get(d.key);
+    return !cur || (cur.updated_by === "seed" && cur.body !== d.body);
+  });
+  for (const d of changed) await saveKnowledge(env, d.key, d.body, "seed");
+  return changed.map((d) => d.title);
 }
 
 export async function loadKnowledge(env: Env): Promise<Map<string, string>> {

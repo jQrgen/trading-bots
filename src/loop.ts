@@ -1,4 +1,4 @@
-import { PUSD, type Env, type Horizon, type RiskLimits } from "./config";
+import { ROUND_TRIP_FEE_PCT, PUSD, type Env, type Horizon, type RiskLimits } from "./config";
 import { activePools, configureEndpoints, candles, launchpadList, symbolOf, topTokens, tokensByIds, type TokenInfo } from "./cauldron";
 import { askAgent, hasGrok } from "./grok";
 import { loadKnowledge, loadRiskLimits, seedKnowledge } from "./knowledge";
@@ -32,7 +32,14 @@ export async function runCycle(env: Env): Promise<void> {
   await withLock(env, async () => {
     const L = await newCycle(env);
     try {
-      const ctx = await mechanical(env, L);
+      let ctx: Ctx;
+      try {
+        ctx = await mechanical(env, L);
+        await markSighted(env, L);
+      } catch (err) {
+        await markBlind(env, L, (err as Error).message);
+        return;
+      }
       const brain = brainOf(env);
       if (brain === "xai-api") await xaiBrain(env, L, ctx);
       else if (brain === "rules") await rulesBrain(env, L, ctx);
@@ -42,6 +49,30 @@ export async function runCycle(env: Env): Promise<void> {
       for (const a of ["orin", "vela", "kade", "nova", "rune", "zara"] as const) await L.status(a, idleText(env));
     }
   });
+}
+
+/**
+ * "Unavailable" is a verdict of its own (lesson from HyperGrok): when market data can't be read, the desk is blind.
+ * Stops can't be checked and nothing new is bought until it can see again. Silence must never look like a calm market.
+ */
+async function markBlind(env: Env, L: Ledger, why: string) {
+  const since = await L.setting("blind_since");
+  if (!since) {
+    await L.setSetting("blind_since", String(Date.now()));
+    await L.log("kade", "alert", `Desk is BLIND: market data unavailable (${why.replace(/\.$/, "")}). Stops can't be checked and no new trades until it can see again.`);
+  } else {
+    const min = Math.round((Date.now() - Number(since)) / 60000);
+    await L.log("kade", "alert", `Still blind after ${min} min: ${why}`);
+  }
+}
+
+async function markSighted(env: Env, L: Ledger) {
+  await L.setSetting("last_market_ok", String(Date.now()));
+  const since = await L.setting("blind_since");
+  if (since) {
+    await L.setSetting("blind_since", "");
+    await L.log("kade", "alert", `Market data is back after ${Math.round((Date.now() - Number(since)) / 60000)} min blind. Stops were checked again this cycle.`);
+  }
 }
 
 const idleText = (env: Env) => (brainOf(env) === "grok-bot" ? "idle, waiting for Grok Bot" : "idle, next cycle in 15 min");
@@ -76,6 +107,7 @@ export interface Ctx {
   held: Position[];
   book: { total: number; byHorizon: Record<Horizon, number> };
   dayChangePct: number;
+  buysToday: number;
   card: Scorecard;
   tvlDayAgo: Map<string, number>;
 }
@@ -84,7 +116,7 @@ export interface Ctx {
 export async function loadCtx(env: Env, L: Ledger): Promise<Ctx> {
   await ensureWallet(env, L);
   const seeded = await seedKnowledge(env);
-  if (seeded.length) await L.log("desk", "knowledge", `Knowledge base seeded with defaults: ${seeded.join(", ")}.`, { seeded });
+  if (seeded.length) await L.log("desk", "knowledge", `Knowledge defaults added or refreshed (owner edits are never touched): ${seeded.join(", ")}.`, { seeded });
   const RISK = await loadRiskLimits(env);
   const halted = (await L.setting("halted")) === "1";
   const list = await topTokens(150);
@@ -97,7 +129,8 @@ export async function loadCtx(env: Env, L: Ledger): Promise<Ctx> {
   const dayChangePct = dayAgo ? ((book.total - dayAgo) / dayAgo) * 100 : 0;
   const card = scorecard(await L.closedSince(30 * 86400 * 1000), 30);
   const tvlDayAgo = await L.tvlAt(24 * 3600 * 1000);
-  return { RISK, halted, tokens, list, prices, held, book, dayChangePct, card, tvlDayAgo };
+  const buysToday = (await env.DB.prepare("SELECT COUNT(*) AS n FROM trades WHERE side = 'buy' AND ts >= ?").bind(Date.now() - 24 * 3600 * 1000).first<{ n: number }>())?.n ?? 0;
+  return { RISK, halted, tokens, list, prices, held, book, dayChangePct, buysToday, card, tvlDayAgo };
 }
 
 /** The code-only half: record the market, run stops and targets, snapshot the portfolio. */
@@ -108,7 +141,11 @@ export async function mechanical(env: Env, L: Ledger): Promise<Ctx> {
   let closed = 0;
   for (const p of ctx.held) {
     const now = prices.tokenPusd(p.token_id);
-    const reason = now === null ? null : exitSignal(p.entry_price_pusd, now, p.target_pct, p.stop_pct);
+    if (now === null) {
+      await L.log("kade", "alert", `No price for held ${p.symbol}: its stop and target are UNAVAILABLE this cycle, not "not hit".`, { position_id: p.id });
+      continue;
+    }
+    const reason = exitSignal(p.entry_price_pusd, now, p.target_pct, p.stop_pct);
     if (reason) {
       await closePosition(L, prices, p, reason === "stop" ? "stop hit" : "target hit");
       closed++;
@@ -175,9 +212,13 @@ export async function briefing(env: Env, ctx: Ctx) {
   const newTokens = (await env.DB.prepare("SELECT token_id, symbol, name, source, first_seen, first_pool_ts, last_tvl_bch FROM tokens_seen WHERE research_status = 'new' ORDER BY first_seen DESC LIMIT 15").all()).results;
   const launchpad = (await env.DB.prepare("SELECT id, offered_token_id, status, data, first_seen FROM launchpad WHERE status != 'DISTRIBUTED' ORDER BY first_seen DESC LIMIT 20").all<{ data: string }>()).results.map((r) => ({ ...r, data: JSON.parse(r.data) }));
   const recentSentiment = (await env.DB.prepare("SELECT ts, subject, token_id, symbol, score, mentions, summary FROM sentiment WHERE ts >= ? ORDER BY ts DESC LIMIT 30").bind(Date.now() - 24 * 3600 * 1000).all()).results;
+  const blindSince = (await env.DB.prepare("SELECT value FROM settings WHERE key = 'blind_since'").first<{ value: string }>())?.value;
   return {
     bch_usd: round(prices.bchPusd),
     halted: ctx.halted,
+    desk_was_blind_since: blindSince ? Number(blindSince) : null,
+    buys_last_24h: ctx.buysToday,
+    costs: { round_trip_fee_pct: ROUND_TRIP_FEE_PCT, stop_overshoot_assumed_pct: ctx.RISK.stopGapPct, note: "Each leg in a pool also costs about size / pool liquidity in price impact." },
     sentiment_last_24h: recentSentiment,
     new_tokens_to_research: newTokens,
     launchpad: { live: launchpad.length > 0, sales: launchpad },
@@ -237,7 +278,7 @@ export async function proposeAndCheck(L: Ledger, ctx: Ctx, raw: Omit<Proposal, "
     } else {
       const facts = p.token_id === "bch" ? BCH_FACTS : ctx.tokens.has(p.token_id) ? await tokenFacts(p.token_id, ctx.tokens.get(p.token_id)!) : undefined;
       const heldPusd = ctx.held.filter((h) => h.token_id === p.token_id).reduce((s, h) => s + ctx.prices.value(h.token_id, h.amount), 0);
-      const b: Book = { totalPusd: ctx.book.total, byHorizonPusd: ctx.book.byHorizon, heldPusd, openShort: ctx.held.filter((h) => h.horizon === "short").length, dayChangePct: ctx.dayChangePct, bchPusd: ctx.prices.bchPusd };
+      const b: Book = { totalPusd: ctx.book.total, byHorizonPusd: ctx.book.byHorizon, heldPusd, openShort: ctx.held.filter((h) => h.horizon === "short").length, dayChangePct: ctx.dayChangePct, bchPusd: ctx.prices.bchPusd, buysToday: ctx.buysToday };
       const scale = HORIZONS.includes(p.horizon) ? sizeScale(ctx.card, p.horizon) : 1;
       if (scale < 1) await L.log("kade", "risk", `${p.horizon} trades are losing lately; ${p.symbol} size scaled to ${scale * 100}%.`);
       const r = checkBuy({ ...p, size_pct: Number(p.size_pct) * scale }, facts, b, ctx.halted, ctx.RISK);
@@ -335,11 +376,68 @@ export async function recordJournal(env: Env, L: Ledger, text: string, lessons: 
 }
 
 /** Stats Zara reviews for the journal. */
+/** Facts for each closed position Zara hasn't reviewed yet, computed from the records, not from memory. */
+export async function positionsToReview(env: Env) {
+  const rows = (
+    await env.DB.prepare(
+      "SELECT p.* FROM positions p LEFT JOIN trade_reviews r ON r.position_id = p.id WHERE p.status = 'closed' AND r.position_id IS NULL ORDER BY p.closed_at LIMIT 10",
+    ).all<Position & { exit_pusd: number; close_reason: string; closed_at: number }>()
+  ).results;
+  const out = [];
+  for (const p of rows) {
+    const fills = (await env.DB.prepare("SELECT ts, side, pusd, impact_pct, estimated, reason FROM trades WHERE position_id = ? ORDER BY ts").bind(p.id).all()).results;
+    const proposal = await env.DB.prepare("SELECT id, status, signal, thesis, bull_case, bear_case, risk_notes, decision_note, allowed_pusd FROM proposals WHERE position_id = ?").bind(p.id).first();
+    const pnl = p.exit_pusd - p.cost_pusd;
+    const pnlPct = (pnl / p.cost_pusd) * 100;
+    const plannedRisk = (p.cost_pusd * p.stop_pct) / 100;
+    out.push({
+      position_id: p.id,
+      symbol: p.symbol,
+      horizon: p.horizon,
+      signal: p.signal,
+      close_reason: p.close_reason,
+      cost_pusd: round(p.cost_pusd),
+      exit_pusd: round(p.exit_pusd),
+      outcome_pusd: round(pnl),
+      outcome_pct: round(pnlPct, 1),
+      outcome_r: plannedRisk > 0 ? round(pnl / plannedRisk) : null,
+      stop_pct: p.stop_pct,
+      target_pct: p.target_pct,
+      stop_overshoot_pct: p.close_reason === "stop hit" ? round(-pnlPct - p.stop_pct, 1) : null,
+      holding_hours: round((p.closed_at - p.opened_at) / 3600000, 1),
+      fills,
+      proposal,
+    });
+  }
+  return out;
+}
+
+export interface Review { position_id: number; process: string; break_stage?: string; finding: string }
+
+/** Store Zara's reviews. Outcome numbers come from the records, so a review can't flatter a trade. */
+export async function recordReviews(env: Env, L: Ledger, reviews: Review[]) {
+  const facts = new Map((await positionsToReview(env)).map((f) => [f.position_id, f]));
+  let saved = 0;
+  for (const r of reviews) {
+    const f = facts.get(Number(r.position_id));
+    if (!f || typeof r.finding !== "string") continue;
+    const process = ["clean", "minor", "major"].includes(r.process) ? r.process : "minor";
+    await env.DB.prepare("INSERT OR REPLACE INTO trade_reviews (position_id, ts, symbol, process, break_stage, outcome_pusd, outcome_r, stop_overshoot_pct, finding, agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'zara')")
+      .bind(f.position_id, Date.now(), f.symbol, process, r.break_stage ?? null, f.outcome_pusd, f.outcome_r, f.stop_overshoot_pct, r.finding.slice(0, 500))
+      .run();
+    const overshoot = f.stop_overshoot_pct !== null ? `, stop overshoot ${f.stop_overshoot_pct}%` : "";
+    await L.log("zara", "review", `${f.symbol} reviewed. Process: ${process}${r.break_stage ? ` (${r.break_stage})` : ""}. Outcome: ${f.outcome_pusd} PUSD, ${f.outcome_r ?? "?"}R${overshoot}. Finding: ${r.finding}`, { ...r, facts: f });
+    saved++;
+  }
+  return saved;
+}
+
 export async function journalStats(env: Env, L: Ledger) {
   const since = Date.now() - 24 * 3600 * 1000;
   const closed = (await env.DB.prepare("SELECT symbol, horizon, signal, cost_pusd, exit_pusd, close_reason FROM positions WHERE status = 'closed' AND closed_at >= ?").bind(since).all()).results;
   const vetoes = (await env.DB.prepare("SELECT COUNT(*) AS n FROM proposals WHERE status IN ('risk_failed', 'vetoed') AND ts >= ?").bind(since).first<{ n: number }>())?.n ?? 0;
-  return { closed_24h: closed, failed_or_vetoed_24h: vetoes, scorecard_30d: scorecard(await L.closedSince(30 * 86400 * 1000), 30), value_now: await L.valueAt(0), value_24h_ago: await L.valueAt(24 * 3600 * 1000) };
+  const overshoot = await env.DB.prepare("SELECT COUNT(*) AS n, AVG(stop_overshoot_pct) AS avg, MAX(stop_overshoot_pct) AS worst FROM trade_reviews WHERE stop_overshoot_pct IS NOT NULL").first();
+  return { positions_to_review: await positionsToReview(env), stop_overshoot_so_far: overshoot, closed_24h: closed, failed_or_vetoed_24h: vetoes, scorecard_30d: scorecard(await L.closedSince(30 * 86400 * 1000), 30), value_now: await L.valueAt(0), value_24h_ago: await L.valueAt(24 * 3600 * 1000) };
 }
 
 // ---------- Worker-side brains ----------
@@ -388,7 +486,8 @@ export async function runJournal(env: Env): Promise<void> {
   const stats = await journalStats(env, L);
   await L.status("zara", "writing the daily journal");
   if (brain === "xai-api") {
-    const r = await askAgent<{ journal: string; lessons: string[]; strategy_suggestion?: string }>(env, "zara", "Write today's journal.", stats);
+    const r = await askAgent<{ journal: string; lessons: string[]; strategy_suggestion?: string; reviews?: Review[] }>(env, "zara", "Review the closed trades, then write today's journal.", stats);
+    await recordReviews(env, L, r.reviews ?? []);
     await recordJournal(env, L, r.journal, r.lessons ?? [], r.strategy_suggestion);
   } else {
     const wins = stats.closed_24h.filter((c) => Number(c.exit_pusd) > Number(c.cost_pusd)).length;

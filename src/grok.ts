@@ -10,7 +10,7 @@ export type AgentId = "nova" | "orin" | "vela" | "kade" | "zara";
 /** The system prompt is built from the knowledge base in D1, so it's exactly what the desk shows. */
 async function systemPrompt(env: Env, agent: AgentId) {
   const k = await loadKnowledge(env);
-  return `${k.get("shared")}\n\n${k.get("market")}\n\n## STRATEGY (from the owner)\n\n${k.get("strategy")}\n\n## YOUR ROLE\n\n${k.get(`role:${agent}`)}`;
+  return `${k.get("shared")}\n\n${k.get("playbook")}\n\n${k.get("market")}\n\n## STRATEGY (from the owner)\n\n${k.get("strategy")}\n\n## YOUR ROLE\n\n${k.get(`role:${agent}`)}`;
 }
 
 /**

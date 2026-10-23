@@ -8,3 +8,9 @@ A Grok-powered bot trading team and trading desk for the [Cauldron DEX](https://
 - **Change the strategy:** on the trading desk, under Team knowledge (owner login)
 
 GitHub holds code only. The team thinks inside the Grok Bot app and calls the desk's API (no xAI key needed). Everything else runs on Cloudflare: a Worker serves the trading desk and the team API, enforces the risk limits, simulates fills and watches the market every 15 minutes, and D1 holds all data, including the strategy, market notes, agent roles, risk limits, trades, proposals, every Grok call, scorecards and lessons. `seed/` has the starter defaults copied into D1 on first run. It currently runs in **paper mode**.
+
+## Credits
+
+The desk playbook, trade-review discipline, cost-aware sizing and "unavailable is a verdict" rule are adapted from
+[HyperGrok Trading Desk](https://github.com/galleonlabs/hypergrok-trading-desk) by Andrew Wilkinson and Galleon Labs (MIT),
+rewritten and scaled down for Cauldron's much thinner liquidity.
