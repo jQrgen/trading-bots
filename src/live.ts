@@ -128,7 +128,9 @@ export async function liveSwap(
   return { ...r, verified: true };
 }
 
-export const explorerTx = (txid: string) => `https://blockchair.com/bitcoin-cash/transaction/${txid}`;
+// Nordic Crypto's explorer (the owner's choice). Its search page opens the transaction or address it finds.
+export const explorerUrl = (q: string) => `https://explorer.nordiccrypto.no/search/?q=${encodeURIComponent(q)}&chain=bch`;
+export const explorerTx = explorerUrl;
 
 const event = (env: Env, message: string) =>
   env.DB.prepare("INSERT INTO events (ts, agent, kind, message) VALUES (?, 'desk', 'admin', ?)").bind(Date.now(), message);
