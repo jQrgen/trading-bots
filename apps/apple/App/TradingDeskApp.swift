@@ -6,11 +6,10 @@ struct TradingDeskApp: App {
     @State private var store = DeskStore(service: AppConfig.service(for: AppConfig.savedURL))
 
     var body: some Scene {
-        WindowGroup {
-            RootView()
-                .environment(store)
-        }
         #if os(macOS)
+        WindowGroup {
+            RootView().environment(store)
+        }
         .defaultSize(width: 1180, height: 800)
         .commands {
             CommandGroup(after: .toolbar) {
@@ -23,6 +22,10 @@ struct TradingDeskApp: App {
             SettingsView()
                 .environment(store)
                 .frame(width: 480)
+        }
+        #else
+        WindowGroup {
+            RootView().environment(store)
         }
         #endif
     }
