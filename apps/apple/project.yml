@@ -48,7 +48,18 @@ targets:
     platform: iOS
     sources:
       - path: App
+      - path: Shared
       - path: Resources/iOS
+    # Added to the template's DeskKit dependency (XcodeGen appends template arrays).
+    dependencies:
+      - target: TradingDesk-Widgets
+    info:
+      properties:
+        # Lock Screen and Dynamic Island while the desk trades live (Widgets/).
+        NSSupportsLiveActivities: true
+        # Background app refresh keeps the Live Activity current while the app is closed.
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [com.jqrgen.tradingdesk.refresh]
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -59,6 +70,28 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     scheme:
       testTargets: []
+
+  # Live Activity for the iOS app. Its bundle ID is the app's plus ".widgets"; the export registers it.
+  TradingDesk-Widgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets
+      - path: Shared
+    dependencies:
+      - package: DeskKit
+    info:
+      path: Config/TradingDesk-Widgets-Info.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_NAME: TradingDeskWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: com.jqrgen.tradingdesk.widgets
+        INFOPLIST_KEY_CFBundleDisplayName: Trading Desk
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SKIP_INSTALL: YES
 
   TradingDesk-macOS:
     templates: [DeskApp]

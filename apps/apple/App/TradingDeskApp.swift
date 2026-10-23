@@ -37,7 +37,17 @@ struct TradingDeskApp: App {
         #else
         WindowGroup {
             RootView().environment(store)
+                #if os(iOS)
+                .modifier(LiveActivitySync(store: store))
+                #endif
         }
+        #if os(iOS)
+        .backgroundTask(.appRefresh(LiveActivityController.refreshTaskID)) {
+            await store.refreshLive()
+            await LiveActivityController.sync(store)
+            await LiveActivityController.scheduleRefresh()
+        }
+        #endif
         #endif
     }
 }
@@ -67,3 +77,32 @@ enum AppConfig {
         return client
     }
 }
+
+#if os(iOS)
+/// Starts the Live Activity when the app opens on a live desk, updates it on every refresh,
+/// and asks for background refreshes once the app goes to the background.
+struct LiveActivitySync: ViewModifier {
+    var store: DeskStore
+    @Environment(\.scenePhase) private var phase
+    @AppStorage(LiveActivityController.enabledKey) private var enabled = true
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: store.state.flatMap { LiveActivityState(state: $0, dayChange: store.dayChange) }) {
+                Task { await LiveActivityController.sync(store, start: phase == .active) }
+            }
+            .onChange(of: phase) {
+                switch phase {
+                case .active: Task { await LiveActivityController.sync(store, start: true) }
+                case .background: LiveActivityController.scheduleRefresh()
+                default: break
+                }
+            }
+            .onChange(of: enabled) {
+                Task {
+                    if enabled { await LiveActivityController.sync(store, start: true) } else { await LiveActivityController.endAll() }
+                }
+            }
+    }
+}
+#endif
