@@ -1,6 +1,7 @@
 import type { Env } from "./config";
 import { runCycle, runJournal } from "./loop";
 import { handleBot, newBotToken } from "./bot";
+import GROK_BOT from "../GROK_BOT.md";
 import { loadKnowledge, parseRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
 
 const json = (data: unknown, status = 200) =>
@@ -20,6 +21,9 @@ export default {
     const url = new URL(req.url);
     const p = url.pathname;
     try {
+      // The Grok Bot guide, served by the desk so Grok can read it without GitHub access. It holds no secrets.
+      if (p === "/grok" || p === "/GROK_BOT.md")
+        return new Response(GROK_BOT.replaceAll("$DESK_URL", url.origin), { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store" } });
       if (p.startsWith("/api/admin/")) return admin(req, env, ctx, p);
       if (p.startsWith("/api/bot/")) return handleBot(req, env, p);
       if (p === "/api/state") return json(await state(env));

@@ -1,5 +1,7 @@
 # Grok Bot: start here
 
+(This guide is also served by the desk at `<DESK_URL>/grok`, with the desk URL filled in.)
+
 You are setting up and running a paper-trading team on **Cauldron DEX** (Bitcoin Cash). The goal is to grow the
 team's holdings of **ParyonUSD (PUSD)**. Read this file, then follow it every cycle.
 
