@@ -459,12 +459,13 @@ public struct MarketTick: Decodable, Identifiable, Hashable, Sendable {
         symbol = try? c.decodeIfPresent(String.self, forKey: .symbol)
         pricePusd = try? c.decodeIfPresent(Double.self, forKey: .pricePusd)
         tvlBch = try? c.decodeIfPresent(Double.self, forKey: .tvlBch)
-        chg24hPct = try? c.decodeIfPresent(Double.self, forKey: .chg24hPct)
+        chg24hPct = (try? c.decodeIfPresent(Double.self, forKey: .chg24HPct)) ?? (try? c.decodeIfPresent(Double.self, forKey: .chg24hPct))
         volumeSats = try? c.decodeIfPresent(Double.self, forKey: .volumeSats)
     }
 
-    // convertFromSnakeCase turns "chg_24h_pct" into "chg24hPct".
-    enum CodingKeys: String, CodingKey { case ts, tokenId, symbol, pricePusd, tvlBch, chg24hPct, volumeSats }
+    // convertFromSnakeCase capitalises each part, so "chg_24h_pct" arrives as "chg24HPct".
+    // The lowercase key covers a decoder without the key strategy.
+    enum CodingKeys: String, CodingKey { case ts, tokenId, symbol, pricePusd, tvlBch, chg24HPct, chg24hPct, volumeSats }
 
     /// 24h volume in BCH.
     public var volumeBch: Double? { volumeSats.map { $0 / 100_000_000 } }
