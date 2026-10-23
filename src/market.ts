@@ -80,8 +80,9 @@ export function routePools(pools: Reserve[], amountIn: bigint, spendSats: boolea
   const spotTokens = live.reduce((a, p) => a + p.T, 0n);
   const spot = Number(spotSats) / Number(spotTokens);
   let left = amountIn;
+  const chunk = (amountIn + 47n) / 48n;
   for (let pass = 0; pass < 48 && left > 0n; pass++) {
-    const step = left > 48n ? left / 16n : left;
+    const step = left < chunk ? left : chunk;
     if (step <= 0n) break;
     let best = 0;
     let bestGain = 0n;

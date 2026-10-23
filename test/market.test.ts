@@ -90,3 +90,11 @@ describe("parseJson", () => {
     expect(() => parseJson("nothing")).toThrow();
   });
 });
+
+describe("routePools remainder", () => {
+  it("routes the whole input across many pools", () => {
+    const pools = Array.from({ length: 10 }, () => ({ sats: 1e9, tokens: 1e9 }));
+    const { out } = routePools(pools, 1_000_000n, true);
+    expect(Number(out)).toBeGreaterThan(1_000_000 * 0.99);
+  });
+});
