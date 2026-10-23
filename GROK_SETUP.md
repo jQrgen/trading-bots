@@ -23,37 +23,22 @@ Each cycle: Orin scans → Vela researches (with X and web search) and proposes 
 
 **Mode is PAPER.** Fills are simulated against live Cauldron quotes. Live trading with real keys is deliberately not built yet; it needs the owner's explicit approval.
 
-## One-time setup
+## One-time setup (deploys from GitHub Actions)
 
-You need a Cloudflare account and an xAI API key. Run these from the repo root:
+You don't need to run anything locally. The GitHub Action creates the D1 database, applies migrations, deploys the Worker, uploads the secrets and starts the first cycle.
 
-```bash
-npm ci
-npx wrangler login                      # or set CLOUDFLARE_API_TOKEN
-npx wrangler d1 create trading-desk     # copy the database_id it prints
-# put that id in wrangler.toml under [[d1_databases]] database_id
-npm run db:migrate                      # creates the tables
-npx wrangler secret put XAI_API_KEY     # the xAI key
-npx wrangler secret put ADMIN_TOKEN     # any long random string; owner controls
-npm run deploy                          # prints the desk URL
-```
+1. **Cloudflare API token.** In the Cloudflare dashboard, go to My Profile → API Tokens → Create Token and pick the "Edit Cloudflare Workers" template. Add **Account → D1 → Edit** to it and create it. Also copy your **Account ID** from the Workers & Pages overview page.
+2. **GitHub secrets.** In the repo, go to Settings → Secrets and variables → Actions → Secrets and add:
+   - `CLOUDFLARE_API_TOKEN`: the token from step 1
+   - `CLOUDFLARE_ACCOUNT_ID`: your account ID
+   - `XAI_API_KEY`: your xAI key for Grok
+   - `ADMIN_TOKEN`: any long random string; it's the owner password for the halt switch
+3. **GitHub variable.** On the same page, under Variables, add `DEPLOY_ENABLED` = `true`.
+4. **Deploy.** Go to Actions → Deploy trading desk → Run workflow (or push to `main`).
 
-Then start the first cycle without waiting for the cron:
+The run summary shows the desk URL (`https://cauldron-trading-desk.<your-subdomain>.workers.dev`). If your account has never used Workers, open Workers & Pages in the dashboard once so it creates your workers.dev subdomain. To use your own domain, add a route in the Cloudflare dashboard and set the variable `DESK_URL` to it.
 
-```bash
-curl -X POST "$DESK_URL/api/admin/run" -H "authorization: Bearer $ADMIN_TOKEN"
-```
-
-Open `$DESK_URL` in a browser. The team runs every 15 minutes from then on.
-
-## Auto-deploy from GitHub
-
-In the GitHub repo settings, add:
-
-- **Secrets:** `CLOUDFLARE_API_TOKEN` (with Workers and D1 edit rights), `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID`, `ADMIN_TOKEN`
-- **Variables:** `DEPLOY_ENABLED` = `true`, `DESK_URL` = the Worker URL
-
-After that, every push to `main` is typechecked, tested, migrated, deployed, and announced to the desk. The team sees the update in the activity log, and Nova sees it in her next decision.
+Every push to `main` after that is typechecked, tested, migrated, deployed, and announced to the desk. The team sees the update in the activity log, Nova sees it in her next decision, and a fresh cycle starts.
 
 ## Changing how the team trades
 
@@ -86,6 +71,15 @@ npx wrangler d1 execute trading-desk --remote --command "SELECT * FROM trades OR
 - Never switch to live trading or add signing code without the owner's explicit approval.
 - Never loosen `RISK` limits on your own; that's an owner decision.
 - Run `npm run typecheck` and `npm test` before pushing.
+
+## Manual deploy (alternative)
+
+```bash
+npm ci && npx wrangler login
+npx wrangler d1 create trading-desk   # put the id in wrangler.toml
+npm run db:migrate && npx wrangler secret put XAI_API_KEY && npx wrangler secret put ADMIN_TOKEN
+npm run deploy
+```
 
 ## Local development
 

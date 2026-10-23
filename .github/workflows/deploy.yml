@@ -34,13 +34,35 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
-      - name: Use the real D1 database id
-        run: sed -i "s/REPLACE_WITH_ID_FROM_wrangler_d1_create/${{ secrets.D1_DATABASE_ID }}/" wrangler.toml
+      - name: Create or find the D1 database
+        run: |
+          ID=$(npx wrangler d1 list --json | jq -r '.[] | select(.name == "trading-desk") | .uuid')
+          if [ -z "$ID" ]; then
+            npx wrangler d1 create trading-desk
+            ID=$(npx wrangler d1 list --json | jq -r '.[] | select(.name == "trading-desk") | .uuid')
+          fi
+          echo "D1 database id: $ID"
+          sed -i "s/REPLACE_WITH_ID_FROM_wrangler_d1_create/$ID/" wrangler.toml
       - run: npx wrangler d1 migrations apply trading-desk --remote
-      - run: npx wrangler deploy
-      - name: Notify the desk
+      - name: Deploy the Worker
+        id: deploy
+        run: |
+          npx wrangler deploy | tee deploy.log
+          URL="${{ vars.DESK_URL }}"
+          [ -z "$URL" ] && URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Trading desk: $URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Sync secrets to the Worker
         env:
-          DESK_URL: ${{ vars.DESK_URL }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          jq -n '{XAI_API_KEY: env.XAI_API_KEY, ADMIN_TOKEN: env.ADMIN_TOKEN} | with_entries(select(.value != ""))' > secrets.json
+          npx wrangler secret bulk secrets.json
+          rm secrets.json
+      - name: Tell the desk what changed and run a cycle
+        env:
+          DESK_URL: ${{ steps.deploy.outputs.url }}
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
@@ -49,3 +71,4 @@ jobs:
             '{sha: $sha, message: $message, files: $files}' |
           curl -fsS -X POST "$DESK_URL/api/admin/deployed" \
             -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" --data @-
+          curl -fsS -X POST "$DESK_URL/api/admin/run" -H "authorization: Bearer $ADMIN_TOKEN"
