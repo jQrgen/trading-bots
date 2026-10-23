@@ -80,5 +80,5 @@ jobs:
           curl -fsS -X POST "$DESK_URL/api/admin/run" -H "authorization: Bearer $ADMIN_TOKEN"
           sleep 20
           echo "Desk state after the first cycle:"
-          curl -fsS "$DESK_URL/api/state" | jq -c '{mode, halted, total_pusd, agents: [.agents[]? | {agent, status}]}' || true
+          curl -fsS "$DESK_URL/api/state" | jq -c '{mode, halted, total_pusd, grok_bot}' || true
           curl -fsS "$DESK_URL/api/events?limit=10" | jq -r '.[] | "\(.agent) \(.kind): \(.message)"' || true
