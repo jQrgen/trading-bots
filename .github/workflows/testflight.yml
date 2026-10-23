@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   upload:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -43,6 +43,10 @@ jobs:
       BUILD_NUMBER: ${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
+
+      # App Store Connect only accepts builds made with the Xcode 26 SDKs or later.
+      - name: Xcode version
+        run: xcodebuild -version
 
       - name: Check secrets
         run: |

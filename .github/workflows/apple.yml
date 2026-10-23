@@ -13,13 +13,17 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 40
     defaults:
       run:
         working-directory: apps/apple
     steps:
       - uses: actions/checkout@v4
+
+      # App Store Connect only accepts builds made with the Xcode 26 SDKs or later.
+      - name: Xcode version
+        run: xcodebuild -version
 
       - name: Test DeskKit
         working-directory: apps/apple/DeskKit
