@@ -74,7 +74,16 @@ export default {
         const status = roles
           ? new Map(roles.agents.map((r) => [r.agent, r]))
           : new Map((await env.DB.prepare("SELECT agent, status, updated_at FROM agent_status").all<{ agent: string; status: string; updated_at: number }>()).results.map((r) => [r.agent, r]));
-        return json({ ...team, runner: roles?.runner ?? null, agents: (team.agents ?? []).map((a) => ({ ...a, status: status.get(a.id)?.status ?? null, status_at: status.get(a.id)?.updated_at ?? null })) });
+        return json({
+          ...team,
+          runner: roles?.runner ?? null,
+          cycle_running: roles?.cycle_running ?? false,
+          active_role: roles?.active_role ?? null,
+          active_since: roles?.active_since ?? null,
+          step: roles?.step ?? null,
+          cycle_banner: roles?.cycle_banner ?? null,
+          agents: (team.agents ?? []).map((a) => ({ ...a, status: status.get(a.id)?.status ?? null, status_at: status.get(a.id)?.updated_at ?? null })),
+        });
       }
       if (p === "/api/risk-limits") return json(parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}"));
       if (p === "/api/scorecard") {
@@ -287,6 +296,11 @@ async function state(env: Env) {
     }),
     agents: roles?.agents ?? agents.results,
     runner: roles?.runner ?? null,
+    cycle_running: roles?.cycle_running ?? false,
+    active_role: roles?.active_role ?? null,
+    active_since: roles?.active_since ?? null,
+    step: roles?.step ?? null,
+    cycle_banner: roles?.cycle_banner ?? null,
     grok_bot: {
       token_created_at: s.bot_token_created_at ? Number(s.bot_token_created_at) : null,
       last_seen: s.bot_last_seen ? Number(s.bot_last_seen) : null,

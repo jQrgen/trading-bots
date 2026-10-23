@@ -88,11 +88,33 @@ public struct AgentCard: Identifiable, Hashable, Sendable {
     public var status: String?
     public var updatedAt: Date?
     public var lastEvent: DeskEvent?
+    /// This role is the one working in the current cycle.
+    public var isRunning: Bool
+    public var cycle: Int?
+    public var activeSince: Date?
 
     public var id: String { member.id }
 
+    public init(member: TeamMember, status: String?, updatedAt: Date?, lastEvent: DeskEvent?, isRunning: Bool = false, cycle: Int? = nil, activeSince: Date? = nil) {
+        self.member = member
+        self.status = status
+        self.updatedAt = updatedAt
+        self.lastEvent = lastEvent
+        self.isRunning = isRunning
+        self.cycle = cycle
+        self.activeSince = activeSince
+    }
+
+    /// "Cycle 27 · since 16:05 UTC"
+    public var runningDetail: String {
+        let head = cycle.map { "Cycle \($0)" } ?? "Cycle"
+        let since = activeSince.map { "since \(RunnerStatus.clock($0))" }
+        return [head, since].compactMap { $0 }.joined(separator: " · ")
+    }
+
     /// Hide the old "idle, waiting for Grok Bot" line. The latest event is what that role last concluded.
     public var displayStatus: String {
+        if isRunning { return "Running · " + runningDetail }
         if let status, status.range(of: "idle, waiting", options: .caseInsensitive) == nil { return status }
         if let lastEvent {
             let cycle = lastEvent.cycle.map { "Cycle \($0): " } ?? ""

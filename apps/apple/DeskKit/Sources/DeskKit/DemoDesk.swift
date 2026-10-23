@@ -42,8 +42,10 @@ public struct DemoDesk: DeskService {
             ],
             stats: .init(closed: 9, wins: 6, winRate: 6.0 / 9.0, realizedPusd: 31.80),
             grokBot: GrokBotStatus(tokenCreatedAt: ago(60 * 24 * 2), lastSeen: ago(4)),
-            runner: RunnerStatus(name: "Cauldron Trader", brain: "grok-bot", cycle: 412, state: "complete",
-                                 updatedAt: ago(4), nextRunAt: now.addingTimeInterval(11 * 60), nextJournalAt: nextJournal(now))
+            runner: RunnerStatus(name: "Cauldron Trader", brain: "grok-bot", cycle: 412, state: "running",
+                                 updatedAt: ago(1), nextRunAt: now.addingTimeInterval(11 * 60), nextJournalAt: nextJournal(now)),
+            cycleRunning: true, activeRole: "vela", activeSince: ago(1), step: "Vela research",
+            cycleBanner: "Cycle 412 running, step Vela research"
         )
     }
 

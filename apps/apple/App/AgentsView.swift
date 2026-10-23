@@ -54,7 +54,7 @@ struct TeamGraphView: View {
         guard let m = store.team.member(id) else { return AnyView(EmptyView()) }
         let reports = store.team.reports(of: id)
         return AnyView(VStack(spacing: 10) {
-            node(label: m.name, sub: m.role + (m.hasVeto ? " · veto" : ""), color: .agent(m.id))
+            node(label: m.name, sub: m.role + (m.hasVeto ? " · veto" : ""), color: .agent(m.id), running: running(m.id))
             if !reports.isEmpty {
                 connector
                 HStack(alignment: .top, spacing: 12) {
@@ -68,16 +68,23 @@ struct TeamGraphView: View {
         Rectangle().fill(.secondary.opacity(0.4)).frame(width: 2, height: 14)
     }
 
-    private func node(label: String, sub: String, color: Color) -> some View {
+    private func running(_ id: String) -> Bool {
+        store.state?.cycleRunning == true && store.state?.activeRole?.lowercased() == id
+    }
+
+    private func node(label: String, sub: String, color: Color, running: Bool = false) -> some View {
         VStack(spacing: 2) {
             Text(label).font(.subheadline.weight(.semibold))
             Text(sub).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            if running {
+                Text("Running").font(.caption2.weight(.bold)).foregroundStyle(Color.up)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(minWidth: 64)
-        .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(0.18)))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(color.opacity(0.6)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(running ? 0.32 : 0.18)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(color.opacity(running ? 1 : 0.6), lineWidth: running ? 2 : 1))
     }
 }
 

@@ -238,8 +238,9 @@ struct StatusBanner: View {
         } else if let error = store.lastError {
             banner(error, symbol: "exclamationmark.triangle.fill", tint: .orange)
         }
-        if let runner = store.state?.runner {
-            banner(runner.summary, symbol: "clock.arrow.circlepath", tint: .teal)
+        if let state = store.state {
+            let running = state.cycleRunning
+            banner(state.deskBanner, symbol: running ? "bolt.fill" : "clock.arrow.circlepath", tint: running ? .up : .teal)
         }
         GrokBotBanner()
     }

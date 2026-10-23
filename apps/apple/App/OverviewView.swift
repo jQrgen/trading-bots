@@ -125,25 +125,41 @@ struct AgentTile: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            AgentAvatar(id: card.id, size: 36)
+            ZStack(alignment: .bottomTrailing) {
+                AgentAvatar(id: card.id, size: 36)
+                if card.isRunning {
+                    Circle().fill(Color.up).frame(width: 10, height: 10)
+                        .overlay(Circle().stroke(Color.agent(card.id).opacity(0.12), lineWidth: 2))
+                }
+            }
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
                     Text(card.member.name).font(.headline)
                     Spacer()
-                    if let at = card.updatedAt {
+                    if card.isRunning {
+                        Text("Running").font(.caption2.weight(.bold)).foregroundStyle(Color.up)
+                    } else if let at = card.updatedAt {
                         Text(Format.relative(at)).font(.caption2).foregroundStyle(.secondary)
                     }
                 }
                 Text(card.member.role).font(.caption).foregroundStyle(.secondary)
-                Text(card.displayStatus)
-                    .font(.callout)
-                    .lineLimit(4)
-                    .foregroundStyle(card.status == nil && card.lastEvent == nil ? .secondary : .primary)
+                if card.isRunning {
+                    Text(card.runningDetail)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(Color.up)
+                        .lineLimit(2)
+                } else {
+                    Text(card.displayStatus)
+                        .font(.callout)
+                        .lineLimit(4)
+                        .foregroundStyle(card.status == nil && card.lastEvent == nil ? .secondary : .primary)
+                }
             }
         }
         .padding(Metrics.padding * 0.75)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.agent(card.id).opacity(0.12)))
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.agent(card.id).opacity(card.isRunning ? 0.22 : 0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.agent(card.id).opacity(card.isRunning ? 0.9 : 0), lineWidth: 1.5))
         .contentShape(Rectangle())
     }
 }
