@@ -33,6 +33,9 @@ jobs:
             destination: generic/platform=macOS
           - platform: tvOS
             destination: generic/platform=tvOS
+            # Automatic signing would need a development profile, which needs a registered Apple TV.
+            # The app has no entitlements, so archive unsigned and let the export sign it for the App Store.
+            archive_flags: CODE_SIGNING_ALLOWED=NO
     defaults:
       run:
         working-directory: apps/apple
@@ -68,8 +71,6 @@ jobs:
           brew install xcodegen
           xcodegen
 
-      # Archive straight with the distribution identity, so Xcode makes App Store profiles
-      # (development profiles would need registered devices).
       - name: Archive
         run: |
           xcodebuild archive \
@@ -82,7 +83,7 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
+            ${{ matrix.archive_flags }} \
             -quiet
 
       - name: Upload to App Store Connect
