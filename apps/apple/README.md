@@ -32,7 +32,7 @@ xcodegen            # writes TradingDesk.xcodeproj (git-ignored)
 open TradingDesk.xcodeproj
 ```
 
-Pick the `TradingDesk-iOS`, `TradingDesk-macOS` or `TradingDesk-tvOS` scheme and run. To run on a device, set your Team ID in `project.yml` (`DEVELOPMENT_TEAM`) or in Xcode's Signing tab.
+Pick the `TradingDesk-iOS`, `TradingDesk-macOS` or `TradingDesk-tvOS` scheme and run. Signing uses the team set in `project.yml` (`DEVELOPMENT_TEAM`) with automatic provisioning.
 
 With no desk URL set, the app shows **demo data**. To see the real bots, open Settings and enter the Worker URL, e.g. `https://cauldron-trading-desk.<account>.workers.dev`. `http://localhost:8787` works too while running `wrangler dev`.
 

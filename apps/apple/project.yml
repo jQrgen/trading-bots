@@ -18,8 +18,8 @@ settings:
     PRODUCT_NAME: TradingDesk
     PRODUCT_BUNDLE_IDENTIFIER: com.jqrgen.tradingdesk
     CODE_SIGN_STYLE: Automatic
-    # Set your Apple Developer Team ID here (Membership page) or in Xcode's Signing tab.
-    DEVELOPMENT_TEAM: ""
+    # Apple Developer Team ID (developer.apple.com, Membership).
+    DEVELOPMENT_TEAM: YQBXSUUVJD
     GENERATE_INFOPLIST_FILE: YES
     INFOPLIST_KEY_CFBundleDisplayName: Trading Desk
     INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.finance
