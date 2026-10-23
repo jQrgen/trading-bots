@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkBuy, exitSignal, priceImpactPct, type Book, type Proposal, type TokenFacts } from "../src/risk";
+import { checkBuy, exitSignal, priceImpactPct, roundTripCostPct, stressedCap, stressedLoss, type Book, type Proposal, type TokenFacts } from "../src/risk";
 
 const proposal = (o: Partial<Proposal> = {}): Proposal => ({
   id: "p1", action: "buy", token_id: "t", symbol: "T", horizon: "medium", size_pct: 5, target_pct: 20, stop_pct: 10, thesis: "x", ...o,
@@ -68,5 +68,31 @@ describe("priceImpactPct", () => {
   it("measures relative move", () => {
     expect(priceImpactPct(100, 103)).toBeCloseTo(3);
     expect(priceImpactPct(0, 1)).toBe(Infinity);
+  });
+});
+
+describe("Cauldron cost-aware sizing", () => {
+  it("caps size so the stressed loss equals the budget", () => {
+    const cap = stressedCap(20, 3000, 10, 50);
+    expect(stressedLoss(cap, 20, 3000, 50)).toBeCloseTo(10, 6);
+    expect(cap).toBeLessThan(10 / 0.2); // smaller than the naive stop-distance size
+  });
+
+  it("cuts a wide-stop position to the risk budget", () => {
+    const v = checkBuy(proposal({ horizon: "long", size_pct: 30, stop_pct: 40, target_pct: 100 }), facts({ tvlBch: 500, poolAgeHours: 2000 }), book(), false);
+    expect(v.pass).toBe(true);
+    expect(v.allowedPusd).toBeLessThan(65); // 4% budget / (60% stressed stop + costs)
+    expect(v.reasons.join()).toMatch(/stopped-out trade loses at most 4%/);
+  });
+
+  it("rejects a target that doesn't pay for the round trip", () => {
+    const v = checkBuy(proposal({ target_pct: 4 }), facts(), book(), false);
+    expect(v.pass).toBe(false);
+    expect(v.reasons.join()).toMatch(/round-trip cost/);
+    expect(roundTripCostPct(50, 30000)).toBeCloseTo(1.6 + 100 / 300, 6);
+  });
+
+  it("stops churning after the daily buy limit", () => {
+    expect(checkBuy(proposal(), facts(), book({ buysToday: 4 }), false).reasons.join()).toMatch(/buys in 24h/);
   });
 });

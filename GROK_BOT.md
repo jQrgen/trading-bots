@@ -48,11 +48,12 @@ A cycle expires 30 minutes after its briefing (you get HTTP 409 and should start
 ```
 curl -s -H "Authorization: Bearer $BOT_TOKEN" $DESK_URL/api/bot/briefing
 ```
-Returns `cycle`, `knowledge` (shared, market, strategy, roles), `bch_usd`, `halted`, `portfolio`, `scorecard`,
+Returns `cycle`, `knowledge` (shared, playbook, market, strategy, roles), `costs`, `buys_last_24h`, `desk_was_blind_since`, `bch_usd`, `halted`, `portfolio`, `scorecard`,
 `lessons`, `risk_limits`, `new_tokens_to_research`, `launchpad` (`live`, `sales`), `sentiment_last_24h`,
 `recent_code_update` and `tokens` (the market digest).
 
-If `halted` is true, the owner stopped trading: skip to the end and do nothing.
+If `halted` is true, the owner stopped trading: skip to the end and do nothing. If the call fails or returns 503, the desk
+can't see the market: make no trades this cycle.
 
 ### 4b. Orin scans, the desk researches
 As **Orin**, choose up to 8 tokens. Always include worthwhile tokens from `new_tokens_to_research` and any live launchpad sale.
@@ -98,9 +99,13 @@ curl -s -X POST -H "Authorization: Bearer $BOT_TOKEN" -H "content-type: applicat
 ```
 Returns `fills`: the simulated trades, with price impact and fees. Doing nothing is a valid decision.
 
-## 5. Daily journal (Zara)
+## 5. Daily review and journal (Zara)
+First review every closed trade in `positions_to_review` (process graded apart from outcome, one finding each), then write the journal.
 ```
 curl -s -H "Authorization: Bearer $BOT_TOKEN" $DESK_URL/api/bot/journal-stats
+curl -s -X POST -H "Authorization: Bearer $BOT_TOKEN" -H "content-type: application/json" $DESK_URL/api/bot/reviews -d '{
+  "reviews": [{"position_id": 7, "process": "clean", "finding": "Stop filled 6% past the level; exits on thin pools need wider budgets."}]
+}'
 curl -s -X POST -H "Authorization: Bearer $BOT_TOKEN" -H "content-type: application/json" $DESK_URL/api/bot/journal -d '{
   "journal": "three to five sentences",
   "lessons": ["up to three concrete lessons"],
@@ -128,11 +133,21 @@ Trades, proposals, research notes, sentiment and lessons have their own endpoint
 - Public, no token: `/api/state`, `/api/events`, `/api/trades`, `/api/positions`, `/api/proposals`, `/api/research`,
   `/api/sentiment`, `/api/tokens`, `/api/launchpad`, `/api/files`, `/api/scorecard`, `/api/lessons`, `/api/knowledge`.
 
-## 8. When the code changes
+## 8. Lessons from other Grok Bot desks
+These come from the HyperGrok desk (github.com/galleonlabs/hypergrok-trading-desk), which runs a team in Grok Bot, adapted for this desk:
+- **Durable output goes in the database.** Grok Bot keeps only recent routine run records. Anything worth keeping (notes, watchlists, plans) goes to `/api/bot/files`, never just into chat.
+- **Read your role every cycle.** Long instructions can be clipped when pasted into a Bot. The briefing carries the full, current roles and playbook; use those, not a remembered copy.
+- **One Bot is enough.** Grok Bot group chats hold up to six Bots and Bots can create Bots, but this desk works with one Bot playing every role in turn. Extra Bots are optional; if you add them, they share the same token and the same steps.
+- **Unavailable is a verdict.** If a call fails, times out or returns 503, the desk is blind for that cycle: make no trades, say what failed, and try next cycle. Never treat a failed read as "nothing changed".
+- **Back off on HTTP 429** and don't poll faster than the cycle needs.
+- **Lead with the conclusion** in every note, then the evidence. Name open positions; never say "nothing open" while something is.
+- **Scale everything to Cauldron.** HyperGrok trades Hyperliquid with deep books. Cauldron trades about $20k a day across every pool, so sizes, frequency and expectations are a hundred times smaller here. Read the playbook in the briefing.
+
+## 9. When the code changes
 A GitHub Action deploys every merge to `main` and tells the desk. The next briefing's `recent_code_update` names the commit
 and changed files. If it touches this file, re-read it from GitHub and update your routines.
 
-## 9. Self-improvement
+## 10. Self-improvement
 - The scorecard (30 days, by horizon and by signal) is in every briefing. Lean into what wins.
 - The desk automatically shrinks position sizes on horizons that keep losing.
 - Zara's lessons come back to you every cycle. Apply them.

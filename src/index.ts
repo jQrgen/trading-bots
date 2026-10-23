@@ -98,6 +98,7 @@ export default {
         const f = await env.DB.prepare("SELECT * FROM bot_files WHERE path = ?").bind(decodeURIComponent(p.slice(11))).first();
         return f ? json(f) : json({ error: "no such file" }, 404);
       }
+      if (p === "/api/reviews") return json((await env.DB.prepare("SELECT * FROM trade_reviews ORDER BY ts DESC LIMIT 200").all()).results);
       if (p === "/api/lessons") return json((await env.DB.prepare("SELECT * FROM lessons ORDER BY id DESC LIMIT 200").all()).results);
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
       return env.ASSETS.fetch(req);

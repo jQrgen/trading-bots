@@ -9,12 +9,14 @@ import {
   newCycle,
   proposeAndCheck,
   recordJournal,
+  recordReviews,
   recordResearch,
   recordSentiment,
   recordSignals,
   research,
   type Decision,
   type ResearchNote,
+  type Review,
   type SentimentReading,
   type Signal,
   type Verdict,
@@ -31,6 +33,7 @@ import type { Proposal } from "./risk";
  *   POST /api/bot/proposals       Vela's research notes, X sentiment and proposals in, risk-engine verdicts out
  *   POST /api/bot/decisions       Kade's vetoes and Nova's approvals in, paper fills out
  *   POST /api/bot/journal         Zara's daily journal and lessons
+ *   POST /api/bot/reviews         Zara's per-trade reviews (process graded apart from outcome)
  *   GET  /api/bot/journal-stats   what Zara reviews
  *   GET  /api/bot/token/<id>      research packet for any token
  *   GET  /api/bot/files           list the team's shared files (the hivemind)
@@ -67,6 +70,15 @@ export async function newBotToken(env: Env) {
 }
 
 export async function handleBot(req: Request, env: Env, p: string): Promise<Response> {
+  try {
+    return await route(req, env, p);
+  } catch (err) {
+    // Unavailable is a verdict, not "nothing happened": tell Grok plainly and don't let it guess.
+    return json({ error: `UNAVAILABLE: ${(err as Error).message.replace(/\.$/, "")}. The desk can't see the market right now. Make no trades this cycle and try again next cycle.`, unavailable: true }, 503);
+  }
+}
+
+async function route(req: Request, env: Env, p: string): Promise<Response> {
   if (!(await botAuthorized(req, env))) return json({ error: "unauthorized: send Authorization: Bearer <BOT_TOKEN>" }, 401);
   configureEndpoints(env);
   const body = req.method === "POST" || req.method === "PUT" ? ((await req.json().catch(() => ({}))) as Record<string, unknown>) : {};
@@ -83,6 +95,7 @@ export async function handleBot(req: Request, env: Env, p: string): Promise<Resp
       next_step: "POST /api/bot/research with Orin's signals",
       knowledge: {
         shared: k.get("shared"),
+        playbook: k.get("playbook"),
         market: k.get("market"),
         strategy: k.get("strategy"),
         roles: Object.fromEntries(["orin", "vela", "kade", "nova", "rune", "zara"].map((a) => [a, k.get(`role:${a}`)])),
@@ -115,6 +128,12 @@ export async function handleBot(req: Request, env: Env, p: string): Promise<Resp
     const lessons = Array.isArray(body.lessons) ? body.lessons.map(String).slice(0, 5) : [];
     await recordJournal(env, L, body.journal, lessons, typeof body.strategy_suggestion === "string" ? body.strategy_suggestion : undefined);
     return json({ ok: true });
+  }
+
+  if (p === "/api/bot/reviews") {
+    const reviews = (Array.isArray(body.reviews) ? body.reviews : []).slice(0, 20) as Review[];
+    const saved = await recordReviews(env, new Ledger(env, 0), reviews);
+    return json({ ok: true, saved, ignored: reviews.length - saved });
   }
 
   // The remaining steps belong to the cycle started by the latest briefing.

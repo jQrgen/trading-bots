@@ -22,8 +22,17 @@ export const RISK_DEFAULTS = {
   maxOpenShort: 5,
   maxStopPct: 50,
   dailyLossHaltPct: 10,
-  maxTradesPerCycle: 3,
+  maxTradesPerCycle: 1, // Cauldron trades about $20k a day in total; churn pays ~1.6% a round trip
+  maxBuysPerDay: 4,
+  // Size on what a stopped-out trade really costs, not the nominal stop (lesson from HyperGrok, scaled to Cauldron):
+  // the stop can overshoot (the desk checks every 15 min and thin pools gap), the exit pays fees and price impact.
+  maxRiskPerTradePct: { short: 1, medium: 2, long: 4 } as Record<Horizon, number>, // stressed loss, % of the book
+  stopGapPct: 50, // assume a stop fills this much further away than set (12% stop -> 18% loss)
+  minTargetToCostRatio: 3, // the target must be at least 3x the round-trip cost (fees + entry and exit impact)
 };
+
+/** Fees for PUSD -> BCH -> token -> BCH -> PUSD: four hops at 0.3% pool + 0.1% router. */
+export const ROUND_TRIP_FEE_PCT = 1.6;
 
 export type RiskLimits = typeof RISK_DEFAULTS;
 
