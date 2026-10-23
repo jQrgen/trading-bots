@@ -5,7 +5,7 @@ import { loadKnowledge, loadRiskLimits, seedKnowledge } from "./knowledge";
 import { Ledger, type Position } from "./ledger";
 import { Prices, simulateSwap } from "./market";
 import { scorecard, sizeScale, type Scorecard } from "./scorecard";
-import { checkBuy, checkProvide, exitSignal, singleLpOver, type Book, type Proposal, type TokenFacts } from "./risk";
+import { checkBuy, checkProvide, exitSignal, singleLpOver, stopSellAmount, type Book, type Proposal, type TokenFacts } from "./risk";
 import { feeAprPct, lpCandidates, lpValue, openLps, provide, tendLps, withdraw } from "./lp";
 import { publishRoleStatus, refreshRoles } from "./roles";
 import { coinsFor, explorerTx, livePools, liveSwap, loadWallet, syncHoldings, balancesOf } from "./live";
@@ -635,7 +635,7 @@ async function openPosition(L: Ledger, prices: Prices, p: Proposal, sizePusd: nu
       txid = r.txid;
       await syncHoldings(L.env, L, prices, await coinsFor(L.env, L, await loadWallet(L.env)));
     } catch (e) {
-      await L.log("rune", "error", `LIVE BUY ${symbol} not done, nothing was signed or it was rejected: ${(e as Error).message}`, { proposal: p.id });
+      await L.log("rune", "execution", `LIVE BUY ${symbol} failed execution, no position booked: ${(e as Error).message}`, { proposal: p.id, failed: true });
       return null;
     }
   } else {
@@ -658,18 +658,29 @@ async function closePosition(L: Ledger, prices: Prices, pos: Position, reason: s
   const live = await L.live();
   let amount = pos.amount;
   if (live) {
+    let have = 0;
     try {
       const bal = balancesOf(await coinsFor(L.env, L, await loadWallet(L.env)));
-      const have = Number(bal.get(pos.token_id) ?? 0n) - (pos.token_id === "bch" ? RISK.liveBchReserveSats : 0);
-      amount = Math.min(pos.amount, Math.max(0, have));
+      have = Number(bal.get(pos.token_id) ?? 0n) - (pos.token_id === "bch" ? RISK.liveBchReserveSats : 0);
+      if (have < 0) have = 0;
     } catch (e) {
-      await L.log("rune", "error", `LIVE SELL ${pos.symbol} (${reason}) not done: can't read the wallet: ${(e as Error).message}`, { position_id: pos.id });
+      await L.log("rune", "execution", `LIVE SELL ${pos.symbol} (${reason}) failed execution, position stays open: can't read the wallet: ${(e as Error).message}`, { position_id: pos.id, failed: true });
       return null;
     }
-    if (amount <= 0) {
-      await L.log("kade", "alert", `${pos.symbol} position ${pos.id} is not in the live wallet any more. Closing it at zero; check the wallet.`, { position_id: pos.id });
-      await L.closePosition(pos.id, 0, `${reason}; tokens not found in the wallet`);
-      return { side: "sell", symbol: pos.symbol, pusd: 0, pnl_pusd: round(-pos.cost_pusd), position_id: pos.id };
+    if (reason === "stop hit") {
+      const sell = stopSellAmount(pos.amount, have);
+      if (sell === null) {
+        await L.log("kade", "alert", `Stop on ${pos.symbol} position ${pos.id} not sold: the wallet does not hold the tokens.`, { position_id: pos.id });
+        return null;
+      }
+      amount = sell;
+    } else {
+      amount = Math.min(pos.amount, have);
+      if (amount <= 0) {
+        await L.log("kade", "alert", `${pos.symbol} position ${pos.id} is not in the live wallet any more. Closing it at zero; check the wallet.`, { position_id: pos.id });
+        await L.closePosition(pos.id, 0, `${reason}; tokens not found in the wallet`);
+        return { side: "sell", symbol: pos.symbol, pusd: 0, pnl_pusd: round(-pos.cost_pusd), position_id: pos.id };
+      }
     }
   }
   const fill = await simulateSwap(pos.token_id, PUSD, amount, prices);
@@ -684,7 +695,7 @@ async function closePosition(L: Ledger, prices: Prices, pos: Position, reason: s
       txid = r.txid;
       await syncHoldings(L.env, L, prices, await coinsFor(L.env, L, await loadWallet(L.env)));
     } catch (e) {
-      await L.log("rune", "error", `LIVE SELL ${pos.symbol} (${reason}) not done, the position stays open: ${(e as Error).message}`, { position_id: pos.id });
+      await L.log("rune", "execution", `LIVE SELL ${pos.symbol} (${reason}) failed execution, position stays open: ${(e as Error).message}`, { position_id: pos.id, failed: true });
       return null;
     }
   } else {

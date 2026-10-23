@@ -138,6 +138,39 @@ export async function syncHoldings(env: Env, L: Ledger, prices: Prices, coins: C
 
 export interface LiveFill extends SwapResult { verified: true }
 
+/** A node already has this transaction (mempool or a block). */
+async function nodeHas(env: Env, txid: string): Promise<boolean> {
+  const seen = await electrum(servers(env), "blockchain.transaction.get", [txid]).catch(() => null);
+  return typeof seen === "string" ? seen.length > 0 : seen != null && typeof seen === "object";
+}
+
+/**
+ * Broadcast, then return the txid only if a node accepted it.
+ * Cauldron's HTTP broadcaster can echo a txid for a tx no node took; that is not a fill.
+ * Electrum's broadcast returns the txid only when the node accepts it, or an error when it refuses.
+ */
+export async function broadcastAccepted(env: Env, hex: string, confirmWaitMs = 3000): Promise<string> {
+  const txid = txidOf(decodeTx(hex));
+  const errors: string[] = [];
+  try {
+    const got = await broadcastTx(hex);
+    if (got === txid && (await nodeHas(env, txid))) return txid;
+    errors.push(got === txid ? "broadcast returned a txid but no node has the transaction" : `broadcast returned ${got || "nothing"}`);
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (/REJECTED/.test(msg)) throw new Error(msg);
+    errors.push(msg);
+  }
+  const via = await electrum(servers(env), "blockchain.transaction.broadcast", [hex]).catch((x: Error) => x);
+  if (via === txid) return txid;
+  if (via instanceof Error) errors.push(via.message);
+  else errors.push(`Electrum returned ${typeof via === "string" ? via : JSON.stringify(via)}`);
+  // The first broadcast may still have landed even though its answer didn't. One look before calling it failed.
+  if (confirmWaitMs > 0) await new Promise((r) => setTimeout(r, confirmWaitMs));
+  if (await nodeHas(env, txid)) return txid;
+  throw new Error(`broadcast was not accepted: ${errors.join("; ")}`);
+}
+
 /**
  * One real swap. `expectedOut` is the desk's own quote; the router's transaction must deliver at least
  * expectedOut minus the slippage allowance, and may spend at most RISK.liveMaxFeeSats of BCH on fees.
@@ -193,24 +226,7 @@ export async function liveSwap(
   const minOutput = (o.expectedOut * BigInt(Math.round((100 - slip) * 100))) / 10000n;
   const deps = {
     build: builder(env, w, coins),
-    broadcast: async (hex: string) => {
-      try {
-        return await broadcastTx(hex);
-      } catch (e) {
-        const txid = txidOf(decodeTx(hex));
-        // A node said no: the transaction itself is bad, so don't push it anywhere else.
-        if (/REJECTED/.test((e as Error).message)) throw e;
-        // Cauldron's broadcaster is down or unreachable (e.g. a 525). Fall back to the Electrum servers,
-        // which relay to the network directly. Fulcrum answers with the txid, or an error if the node refuses it.
-        const viaElectrum = await electrum(servers(env), "blockchain.transaction.broadcast", [hex]).catch((x: Error) => x);
-        if (typeof viaElectrum === "string") return viaElectrum;
-        // The first broadcast may still have gone through even though its answer didn't reach us. Check before calling it failed.
-        await new Promise((r) => setTimeout(r, 3000));
-        const seen = await electrum(servers(env), "blockchain.transaction.get", [txid]).catch(() => null);
-        if (seen) return txid;
-        throw new Error(`${(e as Error).message}; Electrum fallback: ${viaElectrum instanceof Error ? viaElectrum.message : JSON.stringify(viaElectrum)}`);
-      }
-    },
+    broadcast: (hex: string) => broadcastAccepted(env, hex),
   };
   const r = await swap(w, coins, { sell, buy, amount: o.amount, minOutput, maxFeeSats: BigInt(o.maxFeeSats ?? RISK.liveMaxFeeSats) }, deps);
   await forgetSpent(env, r.spent).catch(() => undefined);

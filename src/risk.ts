@@ -159,3 +159,9 @@ export function exitSignal(entry: number, now: number, targetPct: number, stopPc
   if (change >= targetPct) return "target";
   return null;
 }
+
+/** Base units a stop may sell. Null when the wallet does not hold the token, so nothing is sent. */
+export function stopSellAmount(positionAmount: number, walletAmount: number): number | null {
+  if (!(walletAmount > 0) || !(positionAmount > 0)) return null;
+  return Math.min(positionAmount, walletAmount);
+}

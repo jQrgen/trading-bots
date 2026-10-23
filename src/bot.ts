@@ -226,13 +226,24 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
   return json({ error: "not found" }, 404);
 }
 
-/** Reprice a closed paper position that was filled from bad data. One correction per position. */
+/** `void: true`, or amount 0, closes an open position at cost. Anything else is a paper reprice. */
+export function isPositionVoid(body: { void?: unknown; amount?: unknown }): boolean {
+  if (body.void === true) return true;
+  if (!Object.prototype.hasOwnProperty.call(body, "amount")) return false;
+  const n = Number(body.amount);
+  return n === 0 && !Number.isNaN(n);
+}
+
+/** Reprice a closed paper position, or void an open one (live or paper) that should never have been booked. */
 async function correctPosition(env: Env, body: Record<string, unknown>) {
   const id = Number(body.position_id);
+  const reason = typeof body.reason === "string" ? body.reason.slice(0, 2000) : "";
+  if (!(id > 0) || !reason) return json({ error: "need position_id, amount, exit_pusd, reason" }, 400);
+  if (isPositionVoid(body)) return voidPosition(env, id, reason);
+
   const amount = Math.round(Number(body.amount));
   const exit = Math.round(Number(body.exit_pusd) * 100) / 100;
-  const reason = typeof body.reason === "string" ? body.reason.slice(0, 2000) : "";
-  if (!(id > 0) || !(amount > 0) || !(exit >= 0) || !reason) return json({ error: "need position_id, amount, exit_pusd, reason" }, 400);
+  if (!(amount > 0) || !(exit >= 0)) return json({ error: "need position_id, amount, exit_pusd, reason" }, 400);
   if ((await modeOf(env)) === "live") return json({ error: "live positions follow the chain and can't be corrected by hand" }, 409);
   const pos = await env.DB.prepare("SELECT * FROM positions WHERE id = ? AND status = 'closed'").bind(id).first<{ token_id: string; symbol: string; amount: number; cost_pusd: number; exit_pusd: number }>();
   if (!pos) return json({ error: "no closed position with that id" }, 404);
@@ -249,6 +260,23 @@ async function correctPosition(env: Env, body: Record<string, unknown>) {
   await L.recordTrade({ side: "correction", token_id: pos.token_id, symbol: pos.symbol, amount, pusd: delta, price_pusd: 0, impact_pct: 0, estimated: false, position_id: id, reason });
   await L.log("desk", "correction", `Position ${id} ${pos.symbol} repriced: exit ${before.exit_pusd} -> ${exit} PUSD, cash ${delta >= 0 ? "+" : ""}${delta} PUSD. ${reason}`, { before, amount, exit, delta, evidence: body.evidence ?? null });
   return json({ ok: true, position_id: id, delta_pusd: delta, exit_pusd: exit, pnl_pusd: Math.round((exit - pos.cost_pusd) * 100) / 100 });
+}
+
+/** Close an open position at its cost. 0 P&L, and the cash balance is left alone. */
+async function voidPosition(env: Env, id: number, reason: string) {
+  const key = `voided_position_${id}`;
+  if (await env.DB.prepare("SELECT 1 FROM settings WHERE key = ?").bind(key).first()) return json({ error: "position already voided" }, 409);
+  const pos = await env.DB.prepare("SELECT * FROM positions WHERE id = ? AND status = 'open'").bind(id).first<{ token_id: string; symbol: string; amount: number; cost_pusd: number }>();
+  if (!pos) return json({ error: "no open position with that id" }, 404);
+  const L = new Ledger(env, await openCycle(env));
+  const note = `voided: ${reason}`;
+  await env.DB.batch([
+    env.DB.prepare("UPDATE positions SET status = 'closed', closed_at = ?, exit_pusd = ?, close_reason = ? WHERE id = ?").bind(Date.now(), pos.cost_pusd, note, id),
+    env.DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").bind(key, JSON.stringify({ ts: Date.now(), cost_pusd: pos.cost_pusd, reason })),
+  ]);
+  await L.recordTrade({ side: "correction", token_id: pos.token_id, symbol: pos.symbol, amount: 0, pusd: 0, price_pusd: 0, impact_pct: 0, estimated: false, position_id: id, reason: note });
+  await L.log("desk", "correction", `Position ${id} ${pos.symbol} voided at cost ${pos.cost_pusd} PUSD, 0 P&L, no cash change. ${reason}`, { cost_pusd: pos.cost_pusd, pnl_pusd: 0 });
+  return json({ ok: true, position_id: id, voided: true, exit_pusd: pos.cost_pusd, pnl_pusd: 0 });
 }
 
 async function openCycle(env: Env) {

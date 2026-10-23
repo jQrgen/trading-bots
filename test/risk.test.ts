@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { RISK_DEFAULTS } from "../src/config";
 import { checkProvide } from "../src/risk";
 import { feeIncomePusd, impermanentLossPct, poolValueSats, reservesAt } from "../src/lp";
-import { checkBuy, exitSignal, priceImpactPct, roundTripCostPct, stressedCap, stressedLoss, type Book, type Proposal, type TokenFacts } from "../src/risk";
+import { checkBuy, exitSignal, priceImpactPct, roundTripCostPct, stopSellAmount, stressedCap, stressedLoss, type Book, type Proposal, type TokenFacts } from "../src/risk";
 
 const proposal = (o: Partial<Proposal> = {}): Proposal => ({
   id: "p1", action: "buy", token_id: "t", symbol: "T", horizon: "medium", size_pct: 5, target_pct: 20, stop_pct: 10, thesis: "x", ...o,
@@ -101,6 +101,19 @@ describe("Cauldron cost-aware sizing", () => {
     expect(checkBuy(proposal(), facts(), book({ buysToday: 50 }), false).pass).toBe(true);
     const tight = { ...RISK_DEFAULTS, maxBuysPerDay: 4 };
     expect(checkBuy(proposal(), facts(), book({ buysToday: 4 }), false, tight).reasons.join()).toMatch(/buys in 24h/);
+  });
+});
+
+describe("stopSellAmount", () => {
+  it("does not sell a stop when the wallet does not hold the token", () => {
+    expect(stopSellAmount(19_453_130, 0)).toBeNull();
+    expect(stopSellAmount(19_453_130, -1)).toBeNull();
+    expect(stopSellAmount(0, 100)).toBeNull();
+  });
+
+  it("sells at most what the wallet holds", () => {
+    expect(stopSellAmount(19_453_130, 19_453_130)).toBe(19_453_130);
+    expect(stopSellAmount(19_453_130, 1000)).toBe(1000);
   });
 });
 
