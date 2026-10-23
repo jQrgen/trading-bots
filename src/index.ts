@@ -275,6 +275,8 @@ async function state(env: Env) {
     // Live P&L is measured against the starting value plus the owner's net deposits since.
     start_pusd: s.mode === "live" ? (Number(s.live_start_pusd) ? Number(s.live_start_pusd) + deposits : null) : Number(env.PAPER_START_PUSD),
     deposits_pusd: s.mode === "live" ? deposits : 0,
+    // Everything the owner put in: the funding at Go live plus later top-ups, less withdrawals. P&L is measured against it.
+    total_deposited_pusd: s.mode === "live" && Number(s.live_start_pusd) ? Number(s.live_start_pusd) + deposits : null,
     total_pusd: last?.total_pusd ?? null,
     updated_at: last?.ts ?? null,
     bch_pusd: marks?.bch_pusd ?? null,
