@@ -250,7 +250,7 @@ async function loadTrades() {
   $("trades").innerHTML = t.length
     ? `<table><tr><th>When</th><th>Side</th><th>Token</th><th class="num">PUSD</th><th class="num">Impact</th></tr>${t
         .slice(0, 50)
-        .map((r) => `<tr title="${esc(r.reason)}"><td>${new Date(r.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td><td class="${r.side === "buy" || r.side === "lp-in" ? "up" : "down"}">${{ "lp-in": "ADD LIQ", "lp-out": "WITHDRAW" }[r.side] ?? r.side.toUpperCase()}${r.mode === "paper" ? " (paper)" : ""}${r.txid ? ` <a href="${explorer(r.txid)}" target="_blank" rel="noopener">tx</a>` : ""}</td><td>${esc(r.symbol)}</td><td class="num">${fmt(r.pusd)}</td><td class="num">${fmt(r.impact_pct)}%${r.estimated ? "*" : ""}</td></tr>`)
+        .map((r) => `<tr title="${esc(r.reason)}"><td>${new Date(r.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td><td class="${r.side === "buy" || r.side === "lp-in" ? "up" : "down"}">${{ "lp-in": "ADD LIQ", "lp-out": "WITHDRAW", convert: "CONVERT" }[r.side] ?? r.side.toUpperCase()}${r.mode === "paper" ? " (paper)" : ""}${r.txid ? ` <a href="${explorer(r.txid)}" target="_blank" rel="noopener">tx</a>` : ""}</td><td>${esc(r.symbol)}</td><td class="num">${fmt(r.pusd)}</td><td class="num">${fmt(r.impact_pct)}%${r.estimated ? "*" : ""}</td></tr>`)
         .join("")}</table>`
     : `<p class="empty">No trades yet.</p>`;
 }
@@ -513,7 +513,7 @@ $("walletctl").addEventListener("click", async (e) => {
     r = await post("/api/admin/freeze", { frozen });
   }
   if (act === "live") {
-    const typed = prompt("This switches the desk to REAL MONEY. The paper book is archived and the bots trade the wallet's funds within the live limits. Type GO LIVE to confirm.");
+    const typed = prompt("This switches the desk to REAL MONEY. First all BCH above a small fee reserve is swapped to PUSD, then the paper book is archived and the bots trade the wallet's funds within the live limits. Type GO LIVE to confirm.");
     if (typed !== "GO LIVE") return;
     r = await post("/api/admin/live", { confirm: "GO LIVE" });
   }

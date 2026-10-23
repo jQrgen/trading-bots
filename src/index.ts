@@ -1,5 +1,6 @@
 import type { Env } from "./config";
-import { runCycle, runJournal } from "./loop";
+import { convertBchToPusd, recordConversion, runCycle, runJournal } from "./loop";
+import { configureEndpoints } from "./cauldron";
 import { botKey, checkBotToken, handleBot } from "./bot";
 import GROK_BOT from "../GROK_BOT.md";
 import { loadKnowledge, parseRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
@@ -150,9 +151,20 @@ async function admin(req: Request, env: Env, ctx: ExecutionContext, p: string) {
   }
   if (p === "/api/admin/live") {
     if (body.confirm !== "GO LIVE") return json({ error: 'send {"confirm": "GO LIVE"} to trade real money' }, 400);
-    const r = await goLive(env, parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}")).catch((e: Error) => ({ ok: false, error: e.message }));
+    const RISK = parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}");
+    if ((await modeOf(env)) === "live") return json({ ok: true });
+    // Owner's rule: convert the wallet's BCH (above the fee reserve) to PUSD first; only go live if that worked.
+    let converted: Awaited<ReturnType<typeof convertBchToPusd>> = null;
+    try {
+      configureEndpoints(env);
+      converted = await convertBchToPusd(env, RISK);
+    } catch (e) {
+      return json({ ok: false, error: `Not live: converting BCH to PUSD failed, nothing else changed. ${(e as Error).message}` }, 400);
+    }
+    const r = await goLive(env, RISK).catch((e: Error) => ({ ok: false, error: e.message }));
+    if (converted) await recordConversion(env, converted);
     if (r.ok) ctx.waitUntil(runCycle(env));
-    return json(r, r.ok ? 200 : 400);
+    return json({ ...r, converted }, r.ok ? 200 : 400);
   }
   if (p === "/api/admin/paper") {
     const r = await goPaper(env);

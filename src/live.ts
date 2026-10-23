@@ -93,7 +93,7 @@ export interface LiveFill extends SwapResult { verified: true }
  */
 export async function liveSwap(
   env: Env, L: Ledger, RISK: RiskLimits,
-  o: { sell: string; buy: string; amount: bigint; expectedOut: bigint; slippagePct?: number },
+  o: { sell: string; buy: string; amount: bigint; expectedOut: bigint; slippagePct?: number; maxFeeSats?: number },
 ): Promise<LiveFill> {
   if (await isFrozen(env)) throw new Error("wallet frozen by the owner: no on-chain transactions");
   const w = await loadWallet(env);
@@ -122,7 +122,7 @@ export async function liveSwap(
       }
     },
   };
-  const r = await swap(w, coins, { sell, buy, amount: o.amount, minOutput, maxFeeSats: BigInt(RISK.liveMaxFeeSats) }, deps);
+  const r = await swap(w, coins, { sell, buy, amount: o.amount, minOutput, maxFeeSats: BigInt(o.maxFeeSats ?? RISK.liveMaxFeeSats) }, deps);
   const spent = new Set(r.spent.map((c) => `${c.txid}:${c.vout}`));
   cycleCoins.set(L, [...coins.filter((c) => !spent.has(`${c.txid}:${c.vout}`)), ...r.created]);
   return { ...r, verified: true };
@@ -169,8 +169,8 @@ export async function goLive(env: Env, RISK: RiskLimits): Promise<{ ok: boolean;
   const w = await loadWallet(env);
   const b = balancesOf(await fetchCoins(env, w));
   const bch = b.get("bch") ?? 0n;
-  if (bch < BigInt(RISK.liveBchReserveSats + RISK.liveMaxFeeSats))
-    return { ok: false, error: `the wallet needs at least ${(RISK.liveBchReserveSats + RISK.liveMaxFeeSats) / 1e8} BCH for network fees; it has ${Number(bch) / 1e8}` };
+  if (bch < BigInt(RISK.liveBchReserveSats))
+    return { ok: false, error: `the wallet needs at least ${RISK.liveBchReserveSats / 1e8} BCH for network fees; it has ${Number(bch) / 1e8}` };
   if ((b.get(PUSD) ?? 0n) === 0n && bch < 1_000_000n) return { ok: false, error: "the wallet has nothing to trade yet: send PUSD to it" };
   const now = Date.now();
   await env.DB.batch([
