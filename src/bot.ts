@@ -125,7 +125,7 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
     await L.status("orin", "scanning Cauldron");
     const ctx = await loadCtx(env, L);
     const k = await loadKnowledge(env);
-    return json({
+    const out = {
       cycle: L.cycle,
       guide_version: (await sha256(GROK_BOT)).slice(0, 12),
       next_step: "POST /api/bot/research with Orin's signals",
@@ -139,7 +139,11 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
       },
       team_files: (await env.DB.prepare("SELECT path, version, updated_by, updated_at, length(body) AS bytes FROM bot_files ORDER BY updated_at DESC LIMIT 200").all()).results,
       ...(await briefing(env, ctx)),
-    });
+    };
+    // Kept so the owner can see on the desk exactly what the team read this cycle (no secrets in it).
+    const text = JSON.stringify(out);
+    if (text.length < 900_000) await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_briefing', ?)").bind(text).run();
+    return json(out);
   }
 
   if (p === "/api/bot/journal-stats" && req.method === "GET") {
