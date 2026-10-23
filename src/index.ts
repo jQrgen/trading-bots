@@ -3,7 +3,7 @@ import { convertBchToPusd, recordConversion, runCycle, runJournal } from "./loop
 import { configureEndpoints } from "./cauldron";
 import { botKey, checkBotToken, handleBot } from "./bot";
 import GROK_BOT from "../GROK_BOT.md";
-import { loadKnowledge, parseRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
+import { loadKnowledge, loadRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
 import { describeRoles } from "./roles";
 import { dryRunSwap, goLive, goPaper, modeOf, netDeposits, setFrozen, walletInfo } from "./live";
 import { Ledger } from "./ledger";
@@ -76,7 +76,7 @@ export default {
           : new Map((await env.DB.prepare("SELECT agent, status, updated_at FROM agent_status").all<{ agent: string; status: string; updated_at: number }>()).results.map((r) => [r.agent, r]));
         return json({ ...team, runner: roles?.runner ?? null, agents: (team.agents ?? []).map((a) => ({ ...a, status: status.get(a.id)?.status ?? null, status_at: status.get(a.id)?.updated_at ?? null })) });
       }
-      if (p === "/api/risk-limits") return json(parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}"));
+      if (p === "/api/risk-limits") return json(await loadRiskLimits(env));
       if (p === "/api/scorecard") {
         const row = await env.DB.prepare("SELECT ts, window_days, data FROM scorecards ORDER BY ts DESC LIMIT 1").first<{ ts: number; window_days: number; data: string }>();
         return json(row ? { ts: row.ts, window_days: row.window_days, ...JSON.parse(row.data) } : null);
@@ -158,7 +158,7 @@ async function admin(req: Request, env: Env, ctx: ExecutionContext, p: string) {
   }
   if (p === "/api/admin/live") {
     if (body.confirm !== "GO LIVE") return json({ error: 'send {"confirm": "GO LIVE"} to trade real money' }, 400);
-    const RISK = parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}");
+    const RISK = await loadRiskLimits(env);
     if ((await modeOf(env)) === "live") return json({ ok: true });
     // Owner's rule: convert the wallet's BCH (above the fee reserve) to PUSD first; only go live if that worked.
     let converted: Awaited<ReturnType<typeof convertBchToPusd>> = null;
@@ -175,7 +175,7 @@ async function admin(req: Request, env: Env, ctx: ExecutionContext, p: string) {
   }
   if (p === "/api/admin/convert") {
     // Owner's rule: the book is held in PUSD, so BCH sent to the wallet (above the fee reserve) is swapped to PUSD.
-    const RISK = parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}");
+    const RISK = await loadRiskLimits(env);
     if ((await modeOf(env)) !== "live") return json({ ok: false, error: "Only in live mode; Go live converts BCH itself." }, 400);
     try {
       configureEndpoints(env);
@@ -189,7 +189,7 @@ async function admin(req: Request, env: Env, ctx: ExecutionContext, p: string) {
   if (p === "/api/admin/dry-swap") {
     // Build, check and sign a swap without broadcasting it, and report what the network knows about each input.
     configureEndpoints(env);
-    const RISK = parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}");
+    const RISK = await loadRiskLimits(env);
     const sell = typeof body.sell === "string" ? body.sell : "bch";
     const buy = typeof body.buy === "string" ? body.buy : PUSD;
     const amount = BigInt(Math.max(1, Math.floor(Number(body.amount) || 100000)));

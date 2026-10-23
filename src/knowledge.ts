@@ -54,6 +54,7 @@ export async function loadKnowledge(env: Env): Promise<Map<string, string>> {
 
 /** Write a new version of a knowledge entry and keep the old one in history. */
 export async function saveKnowledge(env: Env, key: string, body: string, by: string): Promise<number> {
+  if (key === "risk-limits" && by !== "owner" && by !== "seed") throw new Error("only the owner can change risk limits");
   const seed = SEED.find((d) => d.key === key);
   const cur = await env.DB.prepare("SELECT title, kind, format, version FROM knowledge WHERE key = ?").bind(key).first<{ title: string; kind: string; format: string; version: number }>();
   if (!seed && !cur) throw new Error(`unknown knowledge key ${key}`);
@@ -88,6 +89,11 @@ export function parseRiskLimits(body: string, strict = false): RiskLimits {
     const v = raw[k];
     if (v === undefined) continue;
     const ok = (n: unknown) => typeof n === "number" && isFinite(n) && n >= 0 && n <= (k.includes("Pct") ? 100 : 1e6);
+    if (k === "maxOwnerSharePct") {
+      if (v === null || ok(v)) out[k] = v;
+      else errors.push(k);
+      continue;
+    }
     if (typeof def === "number") {
       if (ok(v)) out[k] = v;
       else errors.push(k);

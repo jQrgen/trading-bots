@@ -5,7 +5,7 @@ import { loadKnowledge, loadRiskLimits, seedKnowledge } from "./knowledge";
 import { Ledger, type Position } from "./ledger";
 import { Prices, simulateSwap } from "./market";
 import { scorecard, sizeScale, type Scorecard } from "./scorecard";
-import { checkBuy, checkProvide, exitSignal, type Book, type Proposal, type TokenFacts } from "./risk";
+import { checkBuy, checkProvide, exitSignal, singleLpOver, type Book, type Proposal, type TokenFacts } from "./risk";
 import { feeAprPct, lpCandidates, lpValue, openLps, provide, tendLps, withdraw } from "./lp";
 import { publishRoleStatus, refreshRoles } from "./roles";
 import { coinsFor, explorerTx, livePools, liveSwap, loadWallet, syncHoldings, balancesOf } from "./live";
@@ -594,7 +594,7 @@ async function tokenFacts(id: string, t: TokenInfo): Promise<TokenFacts> {
 
 function rugLine(symbol: string, f: TokenFacts, RISK: RiskLimits) {
   const flags = [];
-  if (f.topOwnerSharePct > RISK.maxOwnerSharePct) flags.push(`one LP holds ${f.topOwnerSharePct}% of liquidity`);
+  if (singleLpOver(f.topOwnerSharePct, RISK.maxOwnerSharePct)) flags.push(`one LP holds ${f.topOwnerSharePct}% of liquidity`);
   if (f.poolAgeHours < 24) flags.push(`pool only ${f.poolAgeHours.toFixed(0)}h old`);
   if (f.tvlBch < 5) flags.push(`thin liquidity ${f.tvlBch.toFixed(1)} BCH`);
   return `Rug check ${symbol}: ${flags.length ? "flags: " + flags.join(", ") : "no red flags"} (TVL ${f.tvlBch.toFixed(1)} BCH, top LP ${f.topOwnerSharePct}%, age ${(f.poolAgeHours / 24).toFixed(1)}d).`;

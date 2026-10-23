@@ -9,8 +9,8 @@ export const BROADCAST = "https://broadcast.cauldron.quest/broadcast";
 
 export type Horizon = "short" | "medium" | "long";
 
-// Default hard limits. The live values are in D1 (knowledge key "risk-limits"), edited by the owner
-// on the desk. Agents can't change them.
+// Seed for the risk rules in D1 (knowledge key "risk-limits"). The engine reads that row.
+// Only the owner can change it; bots cannot. maxOwnerSharePct null turns the single-LP rule off.
 export const RISK_DEFAULTS = {
   maxPositionPct: { short: 3, medium: 10, long: 30 } as Record<Horizon, number>,
   maxBookPct: { short: 15, medium: 25, long: 60 } as Record<Horizon, number>,
@@ -19,7 +19,7 @@ export const RISK_DEFAULTS = {
   maxPoolSharePct: 2, // a buy may use at most this share of the pool's BCH side, so we can get out again
   minTvlBch: { short: 5, medium: 25, long: 100 } as Record<Horizon, number>,
   minPoolAgeHours: { short: 6, medium: 72, long: 720 } as Record<Horizon, number>,
-  maxOwnerSharePct: 90,
+  maxOwnerSharePct: null as number | null, // null: do not reject a pool because one LP owns it
   maxOpenShort: 5,
   maxStopPct: 50,
   dailyLossHaltPct: 10,

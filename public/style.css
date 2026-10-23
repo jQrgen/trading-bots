@@ -78,6 +78,7 @@ td { padding: 6px; border-bottom: 1px solid var(--line); font-variant-numeric: t
 .chip.watch, .chip.new { color: var(--warn); border-color: var(--warn); }
 .chip.risk_failed, .chip.vetoed, .chip.rejected, .chip.avoid { color: var(--down); border-color: var(--down); }
 .chip.skipped { color: var(--warn); border-color: var(--warn); }
+.risk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
 .kb { display: grid; grid-template-columns: 220px 1fr; gap: 14px; min-height: 320px; }
 .kb-list { display: flex; flex-direction: column; gap: 2px; }
 .kb-list button { text-align: left; background: transparent; border: 0; color: var(--muted); padding: 6px 8px; border-radius: 6px; font: inherit; cursor: pointer; }
@@ -101,7 +102,7 @@ footer { text-align: center; color: var(--muted); font-size: 12px; padding: 0 16
   .span-2 { grid-column: auto; }
   .agents { grid-template-columns: repeat(2, 1fr); }
   .kpis { grid-template-columns: repeat(2, 1fr); }
-  .kb { grid-template-columns: 1fr; }
+  .risk-grid, .kb { grid-template-columns: 1fr; }
   .kb-list { flex-direction: row; flex-wrap: wrap; }
 }
 
