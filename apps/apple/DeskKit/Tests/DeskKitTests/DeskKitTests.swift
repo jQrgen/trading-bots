@@ -58,8 +58,8 @@ final class DecodingTests: XCTestCase {
         XCTAssertNil(idle.latestNote, "an idle line is replaced by the event, so the note would repeat it")
         let busy = AgentCard(member: member, status: "Cycle 27: scanned · next 16:20 UTC", updatedAt: nil, lastEvent: event)
         XCTAssertEqual(busy.latestNote, "Scanned 40 tokens, 8 signals")
-        let running = AgentCard(member: member, status: "x", updatedAt: nil, lastEvent: event, isRunning: true)
-        XCTAssertNil(running.latestNote)
+        let working = AgentCard(member: member, status: "x", updatedAt: nil, lastEvent: event, isRunning: true)
+        XCTAssertNil(working.latestNote)
         let live = AgentCard(member: member, status: "Cycle 27: 8 signals · next 16:20 UTC", updatedAt: nil, lastEvent: event)
         XCTAssertEqual(live.displayStatus, "Cycle 27: 8 signals · next 16:20 UTC")
     }
