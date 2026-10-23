@@ -2,7 +2,7 @@ import { RISK_DEFAULTS, ROUND_TRIP_FEE_PCT, type Horizon, type RiskLimits } from
 
 export interface Proposal {
   id: string;
-  action: "buy" | "sell";
+  action: "buy" | "sell" | "provide" | "withdraw";
   token_id: string;
   symbol: string;
   horizon: Horizon;
@@ -20,6 +20,7 @@ export interface TokenFacts {
   poolAgeHours: number;
   topOwnerSharePct: number; // share of the token's liquidity owned by its largest LP
   canQuote: boolean;
+  feeAprPct?: number; // estimated fee APR of the token's pools, for liquidity proposals
 }
 
 export interface Book {
@@ -95,6 +96,48 @@ export function stressedCap(stopPct: number, poolPusd: number, budgetPusd: numbe
   const a = (stopPct * (1 + stopGapPct / 100) + ROUND_TRIP_FEE_PCT) / 100;
   const k = 2 / poolPusd; // s^2 coefficient
   return (-a + Math.sqrt(a * a + 4 * k * budgetPusd)) / (2 * k);
+}
+
+export interface LpBook { totalPusd: number; lpBookPusd: number; heldInPoolPusd: number; dayChangePct: number; bchPusd: number }
+
+/** Funding both sides costs ~1.2% (PUSD->BCH, and PUSD->BCH->token for half); withdrawing costs about the same. */
+export const LP_ROUND_TRIP_FEE_PCT = 2.4;
+
+/**
+ * Checks for providing liquidity. Same rules as buying (only shrinks, never enlarges), sized for the worst case:
+ * a pool whose token dumps leaves us holding the token, so the stop plus overshoot and costs must fit the budget.
+ */
+export function checkProvide(p: Proposal, facts: TokenFacts | undefined, book: LpBook, halted: boolean, RISK: RiskLimits = RISK_DEFAULTS): RiskVerdict {
+  const reasons: string[] = [];
+  const stop = p.stop_pct > 0 ? Math.min(p.stop_pct, RISK.lpStopPct) : RISK.lpStopPct;
+  if (halted) reasons.push("desk is halted");
+  if (book.dayChangePct <= -RISK.dailyLossHaltPct) reasons.push(`down ${book.dayChangePct.toFixed(1)}% in 24h, new risk paused`);
+  if (!facts) reasons.push("no market data for token");
+  if (reasons.length) return { pass: false, allowedPusd: 0, reasons };
+  const f = facts!;
+  if (!f.canQuote) reasons.push("router can't quote this token");
+  if (f.tvlBch < RISK.minLpTvlBch) reasons.push(`liquidity ${f.tvlBch.toFixed(1)} BCH below ${RISK.minLpTvlBch} BCH for a pool`);
+  if (f.poolAgeHours < RISK.minLpPoolAgeHours) reasons.push(`pool age ${f.poolAgeHours.toFixed(0)}h below ${RISK.minLpPoolAgeHours}h`);
+  if (f.topOwnerSharePct > RISK.maxOwnerSharePct) reasons.push(`one LP owns ${f.topOwnerSharePct.toFixed(0)}% of liquidity (rug risk)`);
+  if (f.feeAprPct !== undefined && f.feeAprPct < RISK.minLpFeeAprPct) reasons.push(`estimated fee APR ${f.feeAprPct.toFixed(1)}% below ${RISK.minLpFeeAprPct}%`);
+  if (reasons.length) return { pass: false, allowedPusd: 0, reasons };
+
+  const tvlPusd = f.tvlBch * book.bchPusd;
+  const share = RISK.maxLpPoolSharePct / 100;
+  let allowed = (book.totalPusd * Math.max(0, p.size_pct)) / 100;
+  const posCap = (book.totalPusd * RISK.maxLpPositionPct) / 100 - book.heldInPoolPusd;
+  const bookCap = (book.totalPusd * RISK.maxLpBookPct) / 100 - book.lpBookPusd;
+  const shareCap = (2 * share * tvlPusd) / (1 - share) - book.heldInPoolPusd; // our BCH side vs everyone's
+  const stressed = (stop * (1 + RISK.stopGapPct / 100) + LP_ROUND_TRIP_FEE_PCT) / 100;
+  const riskCap = (book.totalPusd * RISK.maxRiskPerTradePct.long) / 100 / stressed;
+  if (allowed > shareCap) reasons.push(`size cut to ${RISK.maxLpPoolSharePct}% of the token's liquidity`);
+  if (allowed > posCap) reasons.push(`size cut to the ${RISK.maxLpPositionPct}% per-pool cap`);
+  if (allowed > bookCap) reasons.push(`size cut to the ${RISK.maxLpBookPct}% liquidity book cap`);
+  if (allowed > riskCap) reasons.push(`size cut so a ${stop}% stop (plus overshoot and costs) loses at most ${RISK.maxRiskPerTradePct.long}% of the book`);
+  allowed = Math.max(0, Math.min(allowed, posCap, bookCap, shareCap, riskCap));
+  if (allowed < RISK.minTradePusd) return { pass: false, allowedPusd: 0, reasons: [...reasons, `size ${allowed.toFixed(2)} PUSD below minimum`] };
+  if (f.feeAprPct !== undefined) reasons.push(`estimated fee APR ${f.feeAprPct.toFixed(0)}% before impermanent loss`);
+  return { pass: true, allowedPusd: allowed, reasons };
 }
 
 export function priceImpactPct(pre: number, post: number): number {

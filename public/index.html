@@ -54,6 +54,11 @@
     </section>
 
     <section class="panel">
+      <div class="row"><h2>Liquidity pools</h2><span class="hint">Paper liquidity earning the 0.3% pool fee. Fees are estimates.</span></div>
+      <div id="liquidity"></div>
+    </section>
+
+    <section class="panel">
       <h2>Trades</h2>
       <div id="trades"></div>
     </section>
@@ -107,7 +112,7 @@
 
   </main>
 
-  <footer>Everything on this page lives in the desk database (Cloudflare D1). <button id="bottoken" class="linkish" hidden>Grok Bot token</button> <button id="owner" class="linkish">Owner login</button></footer>
+  <footer><span id="grokstatus"></span> Everything on this page lives in the desk database (Cloudflare D1). <button id="bottoken" class="linkish" hidden>Connect Grok Bot</button> <button id="owner" class="linkish">Owner login</button></footer>
   <script src="/app.js"></script>
 </body>
 </html>

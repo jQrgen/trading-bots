@@ -5,7 +5,8 @@ import { loadKnowledge, loadRiskLimits, seedKnowledge } from "./knowledge";
 import { Ledger, type Position } from "./ledger";
 import { Prices, simulateSwap } from "./market";
 import { scorecard, sizeScale, type Scorecard } from "./scorecard";
-import { checkBuy, exitSignal, type Book, type Proposal, type TokenFacts } from "./risk";
+import { checkBuy, checkProvide, exitSignal, type Book, type Proposal, type TokenFacts } from "./risk";
+import { feeAprPct, lpCandidates, lpValue, openLps, provide, tendLps, withdraw } from "./lp";
 
 /*
  * A trading cycle has two halves:
@@ -105,7 +106,7 @@ export interface Ctx {
   list: TokenInfo[];
   prices: Prices;
   held: Position[];
-  book: { total: number; byHorizon: Record<Horizon, number> };
+  book: { total: number; byHorizon: Record<Horizon, number>; lp: number };
   dayChangePct: number;
   buysToday: number;
   card: Scorecard;
@@ -151,7 +152,8 @@ export async function mechanical(env: Env, L: Ledger): Promise<Ctx> {
       closed++;
     }
   }
-  if (closed) ctx = { ...ctx, held: await L.openPositions(), book: await bookOf(L, prices) };
+  await tendLps(env, L, prices, ctx.RISK, ctx.tvlDayAgo);
+  ctx = { ...ctx, held: await L.openPositions(), book: await bookOf(L, prices) };
   await L.recordTicks(ctx.list.slice(0, 60).map((t) => ({ token_id: t.token_id, symbol: symbolOf(t), price_pusd: prices.tokenPusd(t.token_id), tvl_bch: t.tvl_sats / 1e8, chg_24h_pct: (t.change_24h_bp ?? 0) / 100, volume_sats: t.trade_volume ?? null })));
   await env.DB.prepare("INSERT OR REPLACE INTO scorecards (ts, window_days, data) VALUES (?, ?, ?)").bind(Math.floor(Date.now() / 3600000) * 3600000, 30, JSON.stringify(ctx.card)).run();
   await discover(env, L, ctx).catch((e) => L.log("orin", "error", `Discovery failed: ${(e as Error).message}`));
@@ -226,7 +228,13 @@ export async function briefing(env: Env, ctx: Ctx) {
       total_pusd: round(ctx.book.total),
       day_change_pct: round(ctx.dayChangePct, 1),
       by_horizon_pusd: Object.fromEntries(Object.entries(ctx.book.byHorizon).map(([k, v]) => [k, round(v)])),
+      liquidity_pusd: round(ctx.book.lp),
       positions: ctx.held.map((p) => ({ token_id: p.token_id, symbol: p.symbol, horizon: p.horizon, cost_pusd: round(p.cost_pusd), value_pusd: round(prices.value(p.token_id, p.amount)), target_pct: p.target_pct, stop_pct: p.stop_pct, thesis: p.thesis })),
+    },
+    liquidity: {
+      positions: (await openLps(env)).map((x) => ({ token_id: x.token_id, symbol: x.symbol, deposit_pusd: round(x.deposit_pusd), value_pusd: round(x.value_pusd ?? x.deposit_pusd), fees_pusd: round(x.fees_pusd), impermanent_loss_pct: round(x.il_pct ?? 0, 1), stop_pct: x.stop_pct, days: round((Date.now() - x.opened_at) / 86400000, 1) })),
+      candidates: lpCandidates(ctx.list, ctx.RISK),
+      note: "Fee APR is an estimate from the indexer's volume and our share of liquidity. Impermanent loss and rugs can exceed fees.",
     },
     scorecard: ctx.card,
     lessons,
@@ -271,10 +279,20 @@ export async function proposeAndCheck(L: Ledger, ctx: Ctx, raw: Omit<Proposal, "
     if (p.action === "sell") {
       const has = ctx.held.some((h) => h.token_id === p.token_id);
       v = { pass: has, allowed: 0, reasons: has ? [] : ["no position to sell"] };
-    } else if (p.action !== "buy") {
-      v = { pass: false, allowed: 0, reasons: ["action must be buy or sell"] };
-    } else if (p.token_id === PUSD) {
-      v = { pass: false, allowed: 0, reasons: ["PUSD is the home asset"] };
+    } else if (p.action === "withdraw") {
+      const has = (await openLps(L.env)).some((x) => x.token_id === p.token_id);
+      v = { pass: has, allowed: 0, reasons: has ? [] : ["no liquidity position in this token"] };
+    } else if (p.action !== "buy" && p.action !== "provide") {
+      v = { pass: false, allowed: 0, reasons: ["action must be buy, sell, provide or withdraw"] };
+    } else if (p.token_id === PUSD || (p.action === "provide" && p.token_id === "bch")) {
+      v = { pass: false, allowed: 0, reasons: [p.token_id === PUSD ? "PUSD is the home asset" : "pools are token/BCH; pick a token"] };
+    } else if (p.action === "provide") {
+      const t = ctx.tokens.get(p.token_id);
+      const facts = t ? { ...(await tokenFacts(p.token_id, t)), feeAprPct: feeAprPct(t.tvl_sats, t.trade_volume ?? 0) } : undefined;
+      const lps = await openLps(L.env);
+      const inPool = lps.filter((x) => x.token_id === p.token_id).reduce((a, x) => a + (lpValue(x, ctx.prices) ?? x.deposit_pusd), 0);
+      const r = checkProvide(p, facts, { totalPusd: ctx.book.total, lpBookPusd: ctx.book.lp, heldInPoolPusd: inPool, dayChangePct: ctx.dayChangePct, bchPusd: ctx.prices.bchPusd }, ctx.halted, ctx.RISK);
+      v = { pass: r.pass, allowed: r.allowedPusd, reasons: r.reasons };
     } else {
       const facts = p.token_id === "bch" ? BCH_FACTS : ctx.tokens.has(p.token_id) ? await tokenFacts(p.token_id, ctx.tokens.get(p.token_id)!) : undefined;
       const heldPusd = ctx.held.filter((h) => h.token_id === p.token_id).reduce((s, h) => s + ctx.prices.value(h.token_id, h.amount), 0);
@@ -284,7 +302,7 @@ export async function proposeAndCheck(L: Ledger, ctx: Ctx, raw: Omit<Proposal, "
       const r = checkBuy({ ...p, size_pct: Number(p.size_pct) * scale }, facts, b, ctx.halted, ctx.RISK);
       v = { pass: r.pass, allowed: r.allowedPusd, reasons: r.reasons };
     }
-    const size = p.action === "buy" && v.pass ? ` Allowed ${round(v.allowed)} PUSD.` : "";
+    const size = (p.action === "buy" || p.action === "provide") && v.pass ? ` Allowed ${round(v.allowed)} PUSD.` : "";
     await L.log("kade", v.pass ? "risk-pass" : "risk-fail", `${p.symbol}: engine ${v.pass ? "PASS" : "FAIL"}.${size} ${v.reasons.join("; ")}`.trim(), { proposal: p.id, ...v });
     await L.updateProposal(p.id, { status: v.pass ? "risk_passed" : "risk_failed", allowed_pusd: v.allowed, risk_notes: v.reasons.join("; ") });
     verdicts.push({ proposal_id: p.id, symbol: p.symbol, action: p.action, pass: v.pass, allowed_pusd: round(v.allowed), reasons: v.reasons });
@@ -316,8 +334,9 @@ export async function decideAndExecute(env: Env, L: Ledger, ctx: Ctx, kade: Verd
   }
   if (novaNote) await L.log("nova", "note", novaNote);
   if (ctx.halted) {
-    for (const p of approved.filter((x) => x.action !== "sell")) await L.updateProposal(p.id, { status: "rejected", decision_note: "desk halted by owner" });
-    approved = approved.filter((p) => p.action === "sell");
+    const exits = (x: Proposal) => x.action === "sell" || x.action === "withdraw";
+    for (const p of approved.filter((x) => !exits(x))) await L.updateProposal(p.id, { status: "rejected", decision_note: "desk halted by owner" });
+    approved = approved.filter(exits);
     await L.log("nova", "decision", "Desk is halted by the owner: only sells go through.");
   }
 
@@ -328,6 +347,16 @@ export async function decideAndExecute(env: Env, L: Ledger, ctx: Ctx, kade: Verd
     if (p.action === "sell") {
       for (const h of ctx.held.filter((x) => x.token_id === p.token_id)) fills.push(await closePosition(L, ctx.prices, h, `Vela exit: ${p.thesis}`));
       await L.updateProposal(p.id, { status: "filled" });
+    } else if (p.action === "withdraw") {
+      for (const x of (await openLps(env)).filter((y) => y.token_id === p.token_id)) {
+        const f = await withdraw(L, ctx.prices, x, `Vela withdraw: ${p.thesis}`);
+        if (f) fills.push(f);
+      }
+      await L.updateProposal(p.id, { status: "filled" });
+    } else if (p.action === "provide") {
+      const fill = await provide(L, ctx.prices, p, p.allowed_pusd, ctx.RISK);
+      await L.updateProposal(p.id, fill ? { status: "filled" } : { status: "skipped", decision_note: "price impact too high at execution" });
+      if (fill) fills.push(fill);
     } else {
       const fill = await openPosition(L, ctx.prices, p, p.allowed_pusd, ctx.RISK);
       await L.updateProposal(p.id, fill ? { status: "filled", position_id: fill.position_id } : { status: "skipped", decision_note: "price impact too high at execution" });
@@ -577,7 +606,9 @@ async function bookOf(L: Ledger, prices: Prices) {
   for (const h of holdings) total += h.asset === "pusd" ? h.amount / 100 : prices.value(h.asset, h.amount);
   const byHorizon = Object.fromEntries(HORIZONS.map((h) => [h, 0])) as Record<Horizon, number>;
   for (const p of positions) byHorizon[p.horizon] += prices.value(p.token_id, p.amount);
-  return { total, byHorizon };
+  let lp = 0;
+  for (const x of await openLps(L.env)) lp += lpValue(x, prices) ?? x.value_pusd ?? x.deposit_pusd;
+  return { total: total + lp, byHorizon, lp };
 }
 
 async function ensureWallet(env: Env, L: Ledger) {

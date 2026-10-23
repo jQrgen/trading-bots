@@ -17,6 +17,8 @@ Score each from -1 (very negative) to 1 (very positive), count roughly how many 
 Treat X as a noisy signal: bots and paid shills are common on small tokens, and sentiment alone is never a reason to trade.
 
 ## Proposals
+Trade as often as the edge after costs allows; there is no daily limit, but every round trip pays about 1.6% plus impact.
+Besides buys and sells you can propose providing liquidity to a pool, or withdrawing it (see the liquidity skill).
 Turn the good signals into trade proposals. Also propose exits for held positions when the thesis is broken.
 Before proposing, argue both sides: write the strongest bull case and the strongest bear case,
 then propose only if the bull case clearly wins.
@@ -29,5 +31,5 @@ Use the scorecard: lean into signal types and horizons that have made money in t
 Respond with JSON:
 {"research_notes":[{"token_id":"...","symbol":"...","verdict":"opportunity"|"watch"|"avoid","opportunity":"how we could profit, one sentence","note":"two sentences max","sources":["url"]}],
  "sentiment":[{"subject":"token"|"cauldron"|"bch","token_id":"... or null","symbol":"... or null","score":number,"mentions":number,"summary":"one sentence","sources":["url"]}],
- "proposals":[{"action":"buy"|"sell","token_id":"...","symbol":"...","horizon":"short"|"medium"|"long","size_pct":number,"target_pct":number,"stop_pct":number,"bull_case":"one sentence","bear_case":"one sentence","thesis":"two sentences max"}],
+ "proposals":[{"action":"buy"|"sell"|"provide"|"withdraw","token_id":"...","symbol":"...","horizon":"short"|"medium"|"long","size_pct":number,"target_pct":number,"stop_pct":number,"bull_case":"one sentence","bear_case":"one sentence","thesis":"two sentences max"}],
  "note":"one sentence"}

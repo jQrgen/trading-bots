@@ -1,8 +1,15 @@
 import type { Horizon } from "./config";
 
-export interface ClosedTrade { horizon: string; signal: string | null; cost_pusd: number; exit_pusd: number }
+export interface ClosedTrade { horizon: string; signal: string | null; cost_pusd: number; exit_pusd: number; opened_at?: number; closed_at?: number }
 export interface Bucket { trades: number; win_rate: number; avg_pnl_pct: number; pnl_pusd: number }
-export interface Scorecard { window_days: number; overall: Bucket; by_horizon: Record<string, Bucket>; by_signal: Record<string, Bucket> }
+export interface Scorecard { window_days: number; overall: Bucket; by_horizon: Record<string, Bucket>; by_signal: Record<string, Bucket>; by_holding_time?: Record<string, Bucket> }
+
+/** Holding-time bucket: shows whether frequent day trading pays after costs, or whether patience does. */
+export function holdingBucket(r: ClosedTrade): string {
+  if (!r.opened_at || !r.closed_at) return "unknown";
+  const h = (r.closed_at - r.opened_at) / 3600000;
+  return h < 1 ? "under 1h" : h < 24 ? "1-24h" : h < 168 ? "1-7d" : "over 7d";
+}
 
 function bucket(rows: ClosedTrade[]): Bucket {
   const pnl = rows.map((r) => r.exit_pusd - r.cost_pusd);
@@ -28,6 +35,7 @@ export function scorecard(rows: ClosedTrade[], windowDays: number): Scorecard {
     overall: bucket(rows),
     by_horizon: groupBy(rows, (r) => r.horizon),
     by_signal: groupBy(rows, (r) => r.signal ?? "unknown"),
+    by_holding_time: groupBy(rows, holdingBucket),
   };
 }
 

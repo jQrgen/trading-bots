@@ -13,7 +13,7 @@ const tokens = () => {
   const wob = 1 + Math.sin(tick / 2) * 0.15 + tick * 0.03;
   return [
     { token_id: PUSD, display_symbol: "PUSD", bcmr: { token: { decimals: 2 } }, tvl_sats: 45e9, tvl_tokens: 12813548, price_now: 352232, price_now_usd: 1, change_24h_bp: 0, first_pool_ts: now - 200 * 86400, score_rank: 1 },
-    { token_id: "f".repeat(64), display_symbol: "MOON", bcmr: { token: { decimals: 0 } }, tvl_sats: 20e8, tvl_tokens: 5e8, price_now: 4 * wob, price_now_usd: 0.00001, change_24h_bp: 1200, first_pool_ts: now - 3 * 86400, score_rank: 2 },
+    { token_id: "f".repeat(64), display_symbol: "MOON", bcmr: { token: { decimals: 0 } }, tvl_sats: 30e8, tvl_tokens: 5e8, trade_volume: 300e8, price_now: 4 * wob, price_now_usd: 0.00001, change_24h_bp: 1200, first_pool_ts: now - 3 * 86400, score_rank: 2 },
     { token_id: "e".repeat(64), display_symbol: "RUG", bcmr: { token: { decimals: 0 } }, tvl_sats: 8e8, tvl_tokens: 1e8, price_now: 8, change_24h_bp: 4000, first_pool_ts: now - 3600, score_rank: 3 },
   ];
 };

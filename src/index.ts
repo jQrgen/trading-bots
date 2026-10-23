@@ -1,6 +1,6 @@
 import type { Env } from "./config";
 import { runCycle, runJournal } from "./loop";
-import { handleBot, newBotToken } from "./bot";
+import { botKey, checkBotToken, handleBot } from "./bot";
 import GROK_BOT from "../GROK_BOT.md";
 import { loadKnowledge, parseRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
 
@@ -22,8 +22,16 @@ export default {
     const p = url.pathname;
     try {
       // The Grok Bot guide, served by the desk so Grok can read it without GitHub access. It holds no secrets.
-      if (p === "/grok" || p === "/GROK_BOT.md")
-        return new Response(GROK_BOT.replaceAll("$DESK_URL", url.origin), { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store" } });
+      if (p === "/grok" || p === "/GROK_BOT.md") {
+        // With ?key=<valid key> the guide comes back with the key filled in, so one link is all Grok needs.
+        const key = url.searchParams.get("key")?.trim() ?? "";
+        const valid = key ? (await checkBotToken(env, key)).ok : false;
+        let guide = GROK_BOT.replaceAll("$DESK_URL", url.origin);
+        if (valid)
+          guide = `> **Your access key is \`${key}\`.** It is already filled in below. Send it on every /api/bot/ call as the header\n> \`Authorization: Bearer ${key}\`, or add \`?key=${key}\` to the URL. Keep it out of anything public.\n\n` + guide.replaceAll("$BOT_TOKEN", key);
+        else if (key) guide = `> **The key in this link is not valid.** Ask the owner for a fresh link from the desk (Owner login, then Connect Grok Bot).\n\n` + guide;
+        return new Response(guide, { headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store" } });
+      }
       if (p.startsWith("/api/admin/")) return admin(req, env, ctx, p);
       if (p.startsWith("/api/bot/")) return handleBot(req, env, p);
       if (p === "/api/state") return json(await state(env));
@@ -98,6 +106,7 @@ export default {
         const f = await env.DB.prepare("SELECT * FROM bot_files WHERE path = ?").bind(decodeURIComponent(p.slice(11))).first();
         return f ? json(f) : json({ error: "no such file" }, 404);
       }
+      if (p === "/api/liquidity") return json((await env.DB.prepare("SELECT * FROM lp_positions ORDER BY status = 'open' DESC, opened_at DESC LIMIT 200").all()).results);
       if (p === "/api/reviews") return json((await env.DB.prepare("SELECT * FROM trade_reviews ORDER BY ts DESC LIMIT 200").all()).results);
       if (p === "/api/lessons") return json((await env.DB.prepare("SELECT * FROM lessons ORDER BY id DESC LIMIT 200").all()).results);
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
@@ -118,7 +127,7 @@ async function admin(req: Request, env: Env, ctx: ExecutionContext, p: string) {
     await env.DB.prepare("INSERT INTO events (ts, agent, kind, message) VALUES (?, 'desk', 'admin', ?)").bind(Date.now(), halted ? "Owner HALTED the desk. Only exits will run." : "Owner resumed the desk.").run();
     return json({ halted });
   }
-  if (p === "/api/admin/bot-token") return json({ token: await newBotToken(env) });
+  if (p === "/api/admin/bot-token") return json({ token: await botKey(env, body.rotate === true) });
   if (p === "/api/admin/run") {
     ctx.waitUntil(runCycle(env));
     return json({ started: true });
@@ -185,6 +194,11 @@ async function state(env: Env) {
       return { ...p, value_pusd: v, pnl_pct: ((v - Number(p.cost_pusd)) / Number(p.cost_pusd)) * 100 };
     }),
     agents: agents.results,
+    grok_bot: {
+      token_created_at: s.bot_token_created_at ? Number(s.bot_token_created_at) : null,
+      last_seen: s.bot_last_seen ? Number(s.bot_last_seen) : null,
+      last_auth_failure: s.bot_last_auth_failure ? JSON.parse(s.bot_last_auth_failure) : null,
+    },
     stats: { closed: closed.results.length, wins, win_rate: closed.results.length ? wins / closed.results.length : null, realized_pusd: realized },
   };
 }

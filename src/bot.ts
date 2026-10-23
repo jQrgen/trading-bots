@@ -22,6 +22,7 @@ import {
   type Verdict,
 } from "./loop";
 import { configureEndpoints } from "./cauldron";
+import GROK_BOT from "../GROK_BOT.md";
 import type { Proposal } from "./risk";
 
 /*
@@ -41,7 +42,9 @@ import type { Proposal } from "./risk";
  *   PUT  /api/bot/files/<path>    write one file: {"body": "...", "agent": "vela", "content_type"?: "text/markdown"}
  *   DELETE /api/bot/files/<path>  delete one file (history is kept)
  *
- * All calls need `Authorization: Bearer <BOT_TOKEN>`.
+ *   GET  /api/bot/check           test the token without starting a cycle
+ *
+ * All calls need `Authorization: Bearer <BOT_TOKEN>` (or `X-Bot-Token: <BOT_TOKEN>`).
  */
 
 const json = (data: unknown, status = 200) =>
@@ -52,20 +55,50 @@ const CYCLE_TTL_MS = 30 * 60 * 1000;
 export const sha256 = async (text: string) =>
   [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, "0")).join("");
 
-/** The bot token is either the BOT_TOKEN secret or one the owner created on the desk (only its hash is stored). */
-async function botAuthorized(req: Request, env: Env) {
-  const sent = (req.headers.get("authorization") ?? "").replace(/^Bearer /, "");
-  if (!sent) return false;
-  if (env.BOT_TOKEN && sent === env.BOT_TOKEN) return true;
-  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'bot_token_hash'").first<{ value: string }>();
-  return Boolean(row && row.value === (await sha256(sent)));
+/**
+ * Pull the token from "Authorization: Bearer <token>" (any case, stray quotes or whitespace), "X-Bot-Token",
+ * or "?key=<token>" on the URL. The URL form lets Grok use the desk with nothing but a link.
+ */
+export function sentToken(req: Request): string {
+  const auth = (req.headers.get("authorization") ?? "").trim();
+  const raw = auth ? auth.replace(/^bearer\s+/i, "") : (req.headers.get("x-bot-token") ?? new URL(req.url).searchParams.get("key") ?? "");
+  return raw.trim().replace(/^["']|["']$/g, "").trim();
 }
 
-/** Create a new bot token (replaces the previous desk-made one). Returned once, never stored in plain text. */
-export async function newBotToken(env: Env) {
+/** The bot token is either the BOT_TOKEN secret or the one the owner made on the desk. */
+export async function checkBotToken(env: Env, sent: string): Promise<{ ok: boolean; reason: string }> {
+  if (!sent) return { ok: false, reason: "no token sent: add ?key=<token> to the URL or the header Authorization: Bearer <token>" };
+  if (env.BOT_TOKEN && sent === env.BOT_TOKEN) return { ok: true, reason: "" };
+  const rows = new Map((await env.DB.prepare("SELECT key, value FROM settings WHERE key IN ('bot_token', 'bot_token_hash')").all<{ key: string; value: string }>()).results.map((r) => [r.key, r.value]));
+  if (rows.get("bot_token") === sent || (rows.has("bot_token_hash") && rows.get("bot_token_hash") === (await sha256(sent)))) return { ok: true, reason: "" };
+  if (!rows.size) return { ok: false, reason: "no Grok Bot key has been made on the desk yet" };
+  return { ok: false, reason: `key not recognised (got ${sent.length} characters starting "${sent.slice(0, 3)}"; the desk's key is 51 characters starting "gb_")` };
+}
+
+async function botAuthorized(req: Request, env: Env): Promise<{ ok: boolean; reason: string }> {
+  const result = await checkBotToken(env, sentToken(req));
+  // Leave a trace for the owner on the desk, so a failing Grok setup is visible without guessing.
+  await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+    .bind(result.ok ? "bot_last_seen" : "bot_last_auth_failure", result.ok ? String(Date.now()) : JSON.stringify({ ts: Date.now(), reason: result.reason }))
+    .run();
+  return result;
+}
+
+/**
+ * The Grok Bot key. Stable: the same key comes back every time and survives deploys (it lives in D1), so the owner
+ * can copy it again whenever needed. A new key is made only when the owner asks to rotate it.
+ * This is a paper desk; the key only guards the team API against vandalism, so it is kept readable for the owner.
+ */
+export async function botKey(env: Env, rotate = false) {
+  const cur = await env.DB.prepare("SELECT value FROM settings WHERE key = 'bot_token'").first<{ value: string }>();
+  if (cur && !rotate) return cur.value;
   const token = "gb_" + [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, "0")).join("");
-  await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('bot_token_hash', ?)").bind(await sha256(token)).run();
-  await env.DB.prepare("INSERT INTO events (ts, agent, kind, message) VALUES (?, 'desk', 'admin', 'Owner created a new Grok Bot token. The previous desk-made token no longer works.')").bind(Date.now()).run();
+  await env.DB.batch([
+    env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('bot_token', ?)").bind(token),
+    env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('bot_token_created_at', ?)").bind(String(Date.now())),
+    env.DB.prepare("DELETE FROM settings WHERE key = 'bot_token_hash'"),
+    env.DB.prepare("INSERT INTO events (ts, agent, kind, message) VALUES (?, 'desk', 'admin', ?)").bind(Date.now(), rotate && cur ? "Owner made a new Grok Bot key. The old key no longer works." : "Grok Bot key created."),
+  ]);
   return token;
 }
 
@@ -79,7 +112,9 @@ export async function handleBot(req: Request, env: Env, p: string): Promise<Resp
 }
 
 async function route(req: Request, env: Env, p: string): Promise<Response> {
-  if (!(await botAuthorized(req, env))) return json({ error: "unauthorized: send Authorization: Bearer <BOT_TOKEN>" }, 401);
+  const auth = await botAuthorized(req, env);
+  if (!auth.ok) return json({ error: `unauthorized: ${auth.reason}` }, 401);
+  if (p === "/api/bot/check") return json({ ok: true, message: "Token accepted. GET /api/bot/briefing to start a cycle." });
   configureEndpoints(env);
   const body = req.method === "POST" || req.method === "PUT" ? ((await req.json().catch(() => ({}))) as Record<string, unknown>) : {};
 
@@ -92,10 +127,12 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
     const k = await loadKnowledge(env);
     return json({
       cycle: L.cycle,
+      guide_version: (await sha256(GROK_BOT)).slice(0, 12),
       next_step: "POST /api/bot/research with Orin's signals",
       knowledge: {
         shared: k.get("shared"),
         playbook: k.get("playbook"),
+        skills: { liquidity: k.get("skill:liquidity") },
         market: k.get("market"),
         strategy: k.get("strategy"),
         roles: Object.fromEntries(["orin", "vela", "kade", "nova", "rune", "zara"].map((a) => [a, k.get(`role:${a}`)])),

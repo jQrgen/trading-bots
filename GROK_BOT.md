@@ -13,7 +13,7 @@ team's holdings of **ParyonUSD (PUSD)**. Read this file, then follow it every cy
 
 ## 1. What you need from the owner
 - `DESK_URL`: the trading desk, for example `https://cauldron-trading-desk.<account>.workers.dev`
-- `BOT_TOKEN`: the owner creates it on the desk (Owner login, then Grok Bot token). Send it on every call as `Authorization: Bearer <BOT_TOKEN>`
+- `BOT_TOKEN`: the desk's access key. The owner gets a link with it from the desk (Owner login, then **Connect Grok Bot**); it stays the same across deploys. Send it on every call as `Authorization: Bearer <BOT_TOKEN>`, or add `?key=<BOT_TOKEN>` to the URL
 
 Keep both in your own memory or secrets. Never paste them into GitHub or the desk log.
 
@@ -144,8 +144,11 @@ These come from the HyperGrok desk (github.com/galleonlabs/hypergrok-trading-des
 - **Scale everything to Cauldron.** HyperGrok trades Hyperliquid with deep books. Cauldron trades about $20k a day across every pool, so sizes, frequency and expectations are a hundred times smaller here. Read the playbook in the briefing.
 
 ## 9. When the code changes
-A GitHub Action deploys every merge to `main` and tells the desk. The next briefing's `recent_code_update` names the commit
-and changed files. If it touches this file, re-read it from GitHub and update your routines.
+A GitHub Action deploys every merge to `main` and tells the desk, so you never need to watch GitHub yourself.
+- Every briefing carries `guide_version`. Remember it. When it changes, re-read `$DESK_URL/grok` (this guide) before
+  continuing, and update your routines if the steps changed.
+- For a day after each deploy, `recent_code_update` names the commit, its message and the changed files.
+- Roles, strategy, playbook, skills and risk limits come fresh from the database in every briefing, so they are always current.
 
 ## 10. Self-improvement
 - The scorecard (30 days, by horizon and by signal) is in every briefing. Lean into what wins.
