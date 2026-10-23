@@ -245,9 +245,11 @@ struct StatusBanner: View {
         } else if let error = store.lastError {
             banner(error, symbol: "exclamationmark.triangle.fill", tint: .orange)
         }
-        if let runner = store.state?.runner {
-            banner(runner.summary, symbol: runner.isOverdue() ? "clock.badge.exclamationmark" : "clock.arrow.circlepath",
-                   tint: runner.isOverdue() ? .orange : .teal)
+        if let state = store.state {
+            let running = state.cycleRunning
+            let late = !running && state.runner?.isOverdue() == true
+            banner(state.deskBanner, symbol: running ? "bolt.fill" : late ? "clock.badge.exclamationmark" : "clock.arrow.circlepath",
+                   tint: running ? .up : late ? .orange : .teal)
         }
         GrokBotBanner()
     }

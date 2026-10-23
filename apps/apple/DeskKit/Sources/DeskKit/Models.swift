@@ -36,6 +36,15 @@ public struct DeskState: Decodable, Sendable {
     public var depositsPusd: Double
     /// Everything the owner has put in: the funding at Go live plus top-ups minus withdrawals. P&L is measured against it.
     public var totalDepositedPusd: Double?
+    /// True while a cycle (or Zara's journal) is in progress.
+    public var cycleRunning: Bool
+    /// Role working right now: orin, vela, kade, nova, rune or zara.
+    public var activeRole: String?
+    public var activeSince: Date?
+    /// "Orin scan", "Vela research", and the other steps.
+    public var step: String?
+    /// Desk banner, e.g. "Cycle 27 running, step Vela research" or "idle, next run 16:20 UTC".
+    public var cycleBanner: String?
 
     public struct Stats: Decodable, Sendable {
         public var closed: Int
@@ -75,7 +84,8 @@ public struct DeskState: Decodable, Sendable {
     public init(mode: TradingMode, halted: Bool, startPusd: Double?, totalPusd: Double?, updatedAt: Date?, bchPusd: Double?,
                 holdings: [Holding], positions: [Position], agents: [AgentStatus], stats: Stats, grokBot: GrokBotStatus? = nil,
                 runner: RunnerStatus? = nil, frozen: Bool = false, liveSince: Date? = nil, depositsPusd: Double = 0,
-                totalDepositedPusd: Double? = nil) {
+                totalDepositedPusd: Double? = nil, cycleRunning: Bool = false, activeRole: String? = nil, activeSince: Date? = nil,
+                step: String? = nil, cycleBanner: String? = nil) {
         self.mode = mode
         self.halted = halted
         self.startPusd = startPusd
@@ -92,6 +102,11 @@ public struct DeskState: Decodable, Sendable {
         self.liveSince = liveSince
         self.depositsPusd = depositsPusd
         self.totalDepositedPusd = totalDepositedPusd
+        self.cycleRunning = cycleRunning
+        self.activeRole = activeRole
+        self.activeSince = activeSince
+        self.step = step
+        self.cycleBanner = cycleBanner
     }
 
     public init(from decoder: Decoder) throws {
@@ -112,10 +127,33 @@ public struct DeskState: Decodable, Sendable {
         liveSince = try? c.decodeIfPresent(Date.self, forKey: .liveSince)
         depositsPusd = (try? c.decodeIfPresent(Double.self, forKey: .depositsPusd)) ?? 0
         totalDepositedPusd = try? c.decodeIfPresent(Double.self, forKey: .totalDepositedPusd)
+        cycleRunning = (try? c.decodeIfPresent(FlexBool.self, forKey: .cycleRunning))?.value ?? false
+        activeRole = try? c.decodeIfPresent(String.self, forKey: .activeRole)
+        activeSince = try? c.decodeIfPresent(Date.self, forKey: .activeSince)
+        step = try? c.decodeIfPresent(String.self, forKey: .step)
+        cycleBanner = try? c.decodeIfPresent(String.self, forKey: .cycleBanner)
     }
 
     enum CodingKeys: String, CodingKey {
-        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats, grokBot, runner, frozen, liveSince, depositsPusd, totalDepositedPusd
+        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats, grokBot, runner
+        case frozen, liveSince, depositsPusd, totalDepositedPusd
+        case cycleRunning, activeRole, activeSince, step, cycleBanner
+    }
+
+    /// Banner for the desk. Prefers the Worker's `cycle_banner`, then builds the same phrase.
+    public var deskBanner: String {
+        if !cycleRunning, let runner, runner.isOverdue() {
+            return runner.nextRunAt.map { "idle, next run overdue (was due \(RunnerStatus.clock($0)))" } ?? "idle, next run overdue"
+        }
+        if let cycleBanner, !cycleBanner.isEmpty { return cycleBanner }
+        if cycleRunning, let step {
+            if let n = runner?.cycle { return "Cycle \(n) running, step \(step)" }
+            return "Running, step \(step)"
+        }
+        if let next = runner?.nextRunAt {
+            return next.timeIntervalSinceNow > 0 ? "idle, next run \(RunnerStatus.clock(next))" : "idle, next run due"
+        }
+        return "idle, next run every 15 min"
     }
 
     /// Profit since the paper (or live) start balance.
@@ -312,7 +350,7 @@ public struct RunnerStatus: Decodable, Hashable, Sendable {
         return "\(name) · \(cycleText) \(stateText) · \(next) · \(journal)"
     }
 
-    private static func clock(_ date: Date) -> String {
+    static func clock(_ date: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(identifier: "UTC")

@@ -59,6 +59,32 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(live.displayStatus, "Cycle 27: 8 signals · next 16:20 UTC")
     }
 
+    func testLiveRole() throws {
+        let json = """
+        {"mode":"paper","halted":false,"holdings":[],"positions":[],"agents":[{"agent":"vela","status":"researching","updated_at":1761220800000}],
+         "stats":{"closed":0,"wins":0},
+         "cycle_running":true,"active_role":"vela","active_since":1761220860000,"step":"Vela research",
+         "cycle_banner":"Cycle 27 running, step Vela research",
+         "runner":{"name":"Cauldron Trader","cycle":27,"state":"running","next_run_at":1761221700000}}
+        """
+        let s = try decoder.decode(DeskState.self, from: Data(json.utf8))
+        XCTAssertTrue(s.cycleRunning)
+        XCTAssertEqual(s.activeRole, "vela")
+        XCTAssertEqual(s.step, "Vela research")
+        XCTAssertEqual(s.activeSince, Date(timeIntervalSince1970: 1_761_220_860))
+        XCTAssertEqual(s.deskBanner, "Cycle 27 running, step Vela research")
+        let member = try XCTUnwrap(Team.fallback.member("vela"))
+        let card = AgentCard(member: member, status: "researching", updatedAt: s.activeSince, lastEvent: nil, isRunning: true, cycle: 27, activeSince: s.activeSince)
+        XCTAssertEqual(card.displayStatus.hasPrefix("Running"), true)
+        XCTAssertTrue(card.runningDetail.contains("Cycle 27"))
+        XCTAssertTrue(card.runningDetail.contains("since "))
+        let idle = DeskState(mode: .paper, halted: false, startPusd: nil, totalPusd: nil, updatedAt: nil, bchPusd: nil,
+                             holdings: [], positions: [], agents: [], stats: .init(),
+                             runner: RunnerStatus(name: "Cauldron Trader", state: "complete", nextRunAt: Date().addingTimeInterval(600)))
+        XCTAssertFalse(idle.cycleRunning)
+        XCTAssertTrue(idle.deskBanner.hasPrefix("idle, next run "))
+    }
+
     func testStateBeforeFirstCycle() throws {
         let json = """
         {"mode":"paper","halted":true,"start_pusd":1000,"total_pusd":null,"updated_at":null,"bch_pusd":null,
@@ -138,6 +164,10 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.state?.mode, .paper)
         XCTAssertEqual(store.agentCards.count, 6)
         XCTAssertEqual(store.state?.runner?.cycle, 412)
+        XCTAssertEqual(store.state?.deskBanner, "Cycle 412 running, step Vela research")
+        XCTAssertEqual(store.agentCards.first { $0.id == "vela" }?.isRunning, true)
+        XCTAssertTrue(store.agentCards.first { $0.id == "vela" }?.runningDetail.contains("Cycle 412") == true)
+        XCTAssertFalse(store.agentCards.contains { $0.id != "vela" && $0.isRunning })
         XCTAssertFalse(store.agentCards.contains { $0.displayStatus.localizedCaseInsensitiveContains("idle, waiting") })
         XCTAssertFalse(store.events.isEmpty)
         XCTAssertEqual(store.events.map(\.id), store.events.map(\.id).sorted(by: >))
