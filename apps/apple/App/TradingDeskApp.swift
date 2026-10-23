@@ -3,20 +3,31 @@ import DeskKit
 
 @main
 struct TradingDeskApp: App {
-    @State private var store = DeskStore(service: AppConfig.service(for: AppConfig.savedURL))
+    @State private var store: DeskStore
+
+    init() {
+        let store = DeskStore(service: AppConfig.service(for: AppConfig.savedURL))
+        _store = State(initialValue: store)
+        // Poll for the app's whole life, so the Mac menu bar stays current with the window closed.
+        Task { await store.poll(every: { AppConfig.interval }) }
+    }
 
     var body: some Scene {
         #if os(macOS)
-        WindowGroup {
-            RootView().environment(store)
+        WindowGroup("Trading Desk", id: "desk") {
+            RootView()
+                .environment(store)
+                .frame(minWidth: 900, minHeight: 600)
         }
-        .defaultSize(width: 1180, height: 800)
-        .commands {
-            CommandGroup(after: .toolbar) {
-                Button("Refresh") { Task { await store.refresh() } }
-                    .keyboardShortcut("r")
-            }
+        .defaultSize(width: 1240, height: 820)
+        .commands { DeskCommands(store: store) }
+
+        MenuBarExtra {
+            MenuBarPanel().environment(store)
+        } label: {
+            MenuBarLabel().environment(store)
         }
+        .menuBarExtraStyle(.window)
 
         Settings {
             SettingsView()
@@ -35,6 +46,11 @@ enum AppConfig {
     static let urlKey = "deskURL"
     static let intervalKey = "refreshSeconds"
     static let defaultInterval = 30.0
+
+    static var interval: Double {
+        let v = UserDefaults.standard.double(forKey: intervalKey)
+        return v >= 5 ? v : defaultInterval
+    }
 
     static var savedURL: String {
         UserDefaults.standard.string(forKey: urlKey) ?? ""

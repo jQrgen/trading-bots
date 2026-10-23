@@ -10,6 +10,13 @@ A native SwiftUI app that shows what the bot team is doing. It is **read-only**:
 | Trades | Fills, open positions and closed positions, with thesis, target/stop and close reason |
 | Journal | Zara's daily reports and the lessons (active and rejected) |
 
+On the Mac it's a proper desktop app rather than a stretched phone layout:
+
+- A sidebar window (several windows are fine) with ⌘1 to ⌘5 to switch sections (the **Go** menu) and ⌘R to refresh.
+- Activity and Trades are sortable, searchable tables. Selecting a row opens its details in an inspector on the right.
+- A **menu bar extra** shows total value at all times. Clicking it shows P&L, win rate, the latest bot activity and an Open Desk button, so you can keep an eye on the desk with the window closed.
+- Preferences live in the standard Settings window (⌘,).
+
 It refreshes every 30 seconds by default, and only fetches events newer than the last one it saw.
 
 ## Layout

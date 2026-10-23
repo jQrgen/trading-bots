@@ -78,11 +78,11 @@ public final class DeskStore {
         if firstError == nil || state != nil { lastRefresh = Date() }
     }
 
-    /// Refreshes on a timer until the calling task is cancelled (e.g. a view's .task).
-    public func poll(every seconds: Double) async {
+    /// Refreshes on a timer until the calling task is cancelled. The interval is re-read each round so Settings changes apply.
+    public func poll(every seconds: @escaping () -> Double) async {
         while !Task.isCancelled {
             await refresh()
-            try? await Task.sleep(for: .seconds(seconds))
+            try? await Task.sleep(for: .seconds(max(seconds(), 5)))
         }
     }
 

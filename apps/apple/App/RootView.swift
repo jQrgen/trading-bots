@@ -33,8 +33,13 @@ enum Screen: String, CaseIterable, Identifiable {
         switch self {
         case .overview: OverviewView()
         case .agents: AgentsView()
+        #if os(macOS)
+        case .activity: MacActivityView()
+        case .trades: MacTradesView()
+        #else
         case .activity: ActivityView()
         case .trades: TradesView()
+        #endif
         case .journal: JournalView()
         case .settings: SettingsView()
         }
@@ -51,20 +56,11 @@ enum Screen: String, CaseIterable, Identifiable {
 }
 
 struct RootView: View {
-    @Environment(DeskStore.self) private var store
-    @AppStorage(AppConfig.intervalKey) private var interval = AppConfig.defaultInterval
-
     #if os(macOS)
     @State private var selection: Screen? = .overview
     #endif
 
     var body: some View {
-        navigation
-            .task(id: interval) { await store.poll(every: max(interval, 5)) }
-    }
-
-    @ViewBuilder
-    private var navigation: some View {
         #if os(macOS)
         NavigationSplitView {
             List(Screen.navigable, selection: $selection) { screen in
@@ -77,6 +73,7 @@ struct RootView: View {
                 (selection ?? .overview).view
             }
         }
+        .focusedSceneValue(\.screenSelection, $selection)
         #else
         TabView {
             ForEach(Screen.navigable) { screen in
