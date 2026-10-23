@@ -1,0 +1,101 @@
+name: TestFlight
+
+# Archives the iOS, macOS and tvOS apps, signs them with Xcode's cloud-managed certificates
+# (via an App Store Connect API key) and uploads them to App Store Connect for internal TestFlight.
+#
+# Repo secrets (Settings > Secrets and variables > Actions):
+#   ASC_KEY_ID     Key ID of the App Store Connect API key (Admin role)
+#   ASC_ISSUER_ID  Issuer ID shown above the keys list in App Store Connect
+#   ASC_KEY_P8     Full contents of the AuthKey_<KEYID>.p8 file
+
+on:
+  push:
+    branches: [main]
+    paths: ["apps/apple/**", ".github/workflows/testflight.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: iOS
+            destination: generic/platform=iOS
+          - platform: macOS
+            destination: generic/platform=macOS
+          - platform: tvOS
+            destination: generic/platform=tvOS
+            # Automatic signing would need a development profile, which needs a registered Apple TV.
+            # The app has no entitlements, so archive unsigned and let the export sign it for the App Store.
+            archive_flags: CODE_SIGNING_ALLOWED=NO
+    defaults:
+      run:
+        working-directory: apps/apple
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      # Same build number on all three platforms, increasing with every run.
+      BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # App Store Connect only accepts builds made with the Xcode 26 SDKs or later.
+      - name: Xcode version
+        run: xcodebuild -version
+
+      - name: Check secrets
+        run: |
+          if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "${{ secrets.ASC_KEY_P8 }}" ]; then
+            echo "::error::Add ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 as repository secrets (see apps/apple/README.md)."
+            exit 1
+          fi
+
+      - name: Install API key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          KEY_PATH="$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8"
+          printf '%s\n' "$ASC_KEY_P8" > "$KEY_PATH"
+          echo "KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen
+
+      - name: Archive
+        run: |
+          xcodebuild archive \
+            -project TradingDesk.xcodeproj \
+            -scheme "TradingDesk-${{ matrix.platform }}" \
+            -destination "${{ matrix.destination }}" \
+            -archivePath "$RUNNER_TEMP/TradingDesk.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            ${{ matrix.archive_flags }} \
+            -quiet
+
+      - name: Upload to App Store Connect
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/TradingDesk.xcarchive" \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Remove API key
+        if: always()
+        run: rm -f "$RUNNER_TEMP"/AuthKey_*.p8

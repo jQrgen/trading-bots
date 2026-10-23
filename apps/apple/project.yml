@@ -1,0 +1,91 @@
+# XcodeGen spec. Generate the Xcode project with:  brew install xcodegen && xcodegen
+# One bundle ID across iOS, macOS and tvOS so App Store Connect treats them as one app (universal purchase).
+name: TradingDesk
+
+options:
+  bundleIdPrefix: com.jqrgen
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+    tvOS: "17.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    PRODUCT_NAME: TradingDesk
+    PRODUCT_BUNDLE_IDENTIFIER: com.jqrgen.tradingdesk
+    CODE_SIGN_STYLE: Automatic
+    # Apple Developer Team ID (developer.apple.com, Membership).
+    DEVELOPMENT_TEAM: YQBXSUUVJD
+    GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_KEY_CFBundleDisplayName: Trading Desk
+    INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.finance
+    # HTTPS only, no custom crypto: skips the export-compliance question on upload.
+    INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+
+packages:
+  DeskKit:
+    path: DeskKit
+
+targetTemplates:
+  DeskApp:
+    type: application
+    dependencies:
+      - package: DeskKit
+    info:
+      path: Config/${target_name}-Info.plist
+      properties:
+        # Lets the app reach `wrangler dev` on http://localhost:8787 during development.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+
+targets:
+  TradingDesk-iOS:
+    templates: [DeskApp]
+    platform: iOS
+    sources:
+      - path: App
+      - path: Resources/iOS
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+    scheme:
+      testTargets: []
+
+  TradingDesk-macOS:
+    templates: [DeskApp]
+    platform: macOS
+    sources:
+      - path: App
+      - path: Resources/macOS
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    entitlements:
+      path: Config/TradingDesk-macOS.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+    scheme:
+      testTargets: []
+
+  TradingDesk-tvOS:
+    templates: [DeskApp]
+    platform: tvOS
+    sources:
+      - path: App
+      - path: Resources/tvOS
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
+        TARGETED_DEVICE_FAMILY: "3"
+    scheme:
+      testTargets: []
