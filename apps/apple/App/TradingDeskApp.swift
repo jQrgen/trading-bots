@@ -43,7 +43,9 @@ struct TradingDeskApp: App {
 }
 
 enum AppConfig {
-    static let urlKey = "deskURL"
+    /// Renamed from "deskURL" when the live desk became the default, so a value saved by an older build
+    /// (such as an empty one, which means demo data) can't keep the app on demo data.
+    static let urlKey = "deskURL2"
     static let intervalKey = "refreshSeconds"
     static let defaultInterval = 30.0
     /// The live desk. Settings can point elsewhere (e.g. `wrangler dev`) or switch to demo data.
