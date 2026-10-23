@@ -1,0 +1,66 @@
+:root {
+  --bg: #0b0e14;
+  --panel: #131823;
+  --line: #222a38;
+  --text: #e6e9ef;
+  --muted: #8a93a6;
+  --up: #3fd18b;
+  --down: #ff6b6b;
+  --accent: #b48cff;
+  --warn: #f5c451;
+  --nova: #b48cff; --orin: #5cc8ff; --vela: #f5c451; --kade: #ff8a5c; --rune: #3fd18b; --zara: #ff7ac6; --desk: #8a93a6;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { padding: 20px 16px 8px; max-width: 1280px; margin: 0 auto; }
+.brand { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+h1 { font-size: 20px; margin: 0; letter-spacing: .02em; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+.mt { margin-top: 20px; }
+.badge { font: 600 11px ui-monospace, monospace; padding: 3px 8px; border-radius: 99px; border: 1px solid var(--accent); color: var(--accent); }
+.badge.danger { border-color: var(--down); color: var(--down); }
+.badge.live { border-color: var(--up); color: var(--up); }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }
+.kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.kpi label { display: block; color: var(--muted); font-size: 12px; }
+.kpi strong { font: 600 22px ui-monospace, monospace; }
+.kpi small { color: var(--muted); margin-left: 6px; }
+main { max-width: 1280px; margin: 0 auto; padding: 8px 16px 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+.span-2 { grid-column: span 2; }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.row h2 { margin: 0 0 12px; }
+.agents { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+.agent { border: 1px solid var(--line); border-top: 3px solid var(--c); border-radius: 8px; padding: 10px; min-width: 0; }
+.agent b { font: 700 12px ui-monospace, monospace; letter-spacing: .15em; color: var(--c); }
+.agent .role { color: var(--muted); font-size: 12px; }
+.agent .status { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
+.agent .last { margin-top: 6px; font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.chart { height: 220px; }
+.chart svg { width: 100%; height: 100%; display: block; }
+.tabs button, select { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; font: inherit; font-size: 12px; cursor: pointer; }
+.tabs button.on { color: var(--text); border-color: var(--accent); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+td { padding: 6px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.num { text-align: right; font-family: ui-monospace, monospace; }
+.up { color: var(--up); } .down { color: var(--down); }
+.log { list-style: none; margin: 0; padding: 0; max-height: 520px; overflow: auto; font-size: 13px; }
+.log li { padding: 7px 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 64px 52px 1fr; gap: 8px; }
+.log time { color: var(--muted); font: 12px ui-monospace, monospace; }
+.log .who { font: 700 11px ui-monospace, monospace; color: var(--c); text-transform: uppercase; }
+.log .kind { display: inline-block; font: 11px ui-monospace, monospace; color: var(--muted); margin-right: 6px; }
+.log .kind.risk-fail, .log .kind.error { color: var(--down); }
+.log .kind.fill, .log .kind.risk-pass { color: var(--up); }
+.journal-entry { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.journal-entry time { color: var(--muted); font-size: 12px; display: block; }
+.lessons { padding-left: 18px; color: var(--muted); }
+.lessons .rejected { text-decoration: line-through; }
+.empty { color: var(--muted); font-size: 13px; }
+footer { text-align: center; color: var(--muted); font-size: 12px; padding: 0 16px 24px; }
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; }
+  .span-2 { grid-column: auto; }
+  .agents { grid-template-columns: repeat(2, 1fr); }
+  .kpis { grid-template-columns: repeat(2, 1fr); }
+}

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cauldron Trading Desk</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>Cauldron Trading Desk</h1>
+      <span id="mode" class="badge">…</span>
+      <span id="halted" class="badge danger" hidden>HALTED</span>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><label>Total value</label><strong id="total">–</strong><small>PUSD</small></div>
+      <div class="kpi"><label>P&amp;L since start</label><strong id="pnl">–</strong><small id="pnlpct"></small></div>
+      <div class="kpi"><label>Win rate</label><strong id="winrate">–</strong><small id="closed"></small></div>
+      <div class="kpi"><label>BCH</label><strong id="bch">–</strong><small>PUSD</small></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel span-2">
+      <h2>Agent comms</h2>
+      <div id="agents" class="agents"></div>
+    </section>
+
+    <section class="panel span-2">
+      <div class="row"><h2>Balance</h2>
+        <div class="tabs" id="range">
+          <button data-days="1">1D</button><button data-days="7" class="on">7D</button><button data-days="30">30D</button><button data-days="365">All</button>
+        </div>
+      </div>
+      <div id="chart" class="chart"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Open positions</h2>
+      <div id="positions"></div>
+      <h2 class="mt">Holdings</h2>
+      <div id="holdings"></div>
+    </section>
+
+    <section class="panel">
+      <div class="row"><h2>Activity log</h2>
+        <select id="filter">
+          <option value="">All agents</option>
+          <option>nova</option><option>orin</option><option>vela</option><option>kade</option><option>rune</option><option>zara</option><option>desk</option>
+        </select>
+      </div>
+      <ol id="log" class="log"></ol>
+    </section>
+
+    <section class="panel">
+      <h2>Trades</h2>
+      <div id="trades"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Journal and lessons</h2>
+      <div id="journal"></div>
+      <ul id="lessons" class="lessons"></ul>
+    </section>
+  </main>
+
+  <footer>Paper and live trades are recorded in Cloudflare D1. Every bot message is shown here as it happens.</footer>
+  <script src="/app.js"></script>
+</body>
+</html>
