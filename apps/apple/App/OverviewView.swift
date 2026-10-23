@@ -82,18 +82,42 @@ struct OverviewView: View {
                 Text("The wallet opens on the first cycle.").foregroundStyle(.secondary)
             } else {
                 let total = rows.compactMap(\.valuePusd).reduce(0, +)
+                let target = store.state?.basketTarget ?? [:]
                 ForEach(rows) { h in
-                    HStack {
-                        Text(h.symbol).font(.body.weight(.medium))
-                        Spacer()
-                        if total > 0, let v = h.valuePusd {
-                            Text(Format.ratio(v / total)).foregroundStyle(.secondary).monospacedDigit()
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(h.symbol).font(.body.weight(.medium))
+                            Text(holdingNote(h)).font(.caption).foregroundStyle(.secondary)
                         }
-                        Text(Format.pusd(h.valuePusd)).monospacedDigit().frame(minWidth: 90, alignment: .trailing)
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(Format.pusd(h.valuePusd)).monospacedDigit()
+                            let share = total > 0 ? Format.ratio((h.valuePusd ?? 0) / total) : "–"
+                            let tgt = target[h.symbol].map { " / target \(Format.ratio($0))" } ?? ""
+                            Text(share + tgt).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        }
                     }
+                }
+                HStack {
+                    Text("Total").font(.body.weight(.semibold))
+                    Spacer()
+                    Text(Format.pusd(total)).font(.body.weight(.semibold)).monospacedDigit()
                 }
             }
         }
+    }
+
+    private func holdingNote(_ h: Holding) -> String {
+        let kind: String
+        switch h.asset {
+        case "bch": kind = "fee reserve"
+        case "pusd": kind = "cash"
+        default:
+            if let p = store.openPositions.first(where: { $0.tokenId == h.asset }) {
+                kind = "#\(p.id) · cost \(Format.pusd(p.costPusd))"
+            } else { kind = "" }
+        }
+        return kind.isEmpty ? h.displayAmount : "\(h.displayAmount) · \(kind)"
     }
 
     private var openPositions: some View {

@@ -22,6 +22,8 @@ public struct DeskState: Decodable, Sendable {
     public var updatedAt: Date?
     public var bchPusd: Double?
     public var holdings: [Holding]
+    /// Owner's core basket target share per symbol, e.g. PUSD 0.7 / RES 0.3.
+    public var basketTarget: [String: Double] = [:]
     public var positions: [Position]
     public var agents: [AgentStatus]
     public var stats: Stats
@@ -118,6 +120,7 @@ public struct DeskState: Decodable, Sendable {
         updatedAt = try? c.decodeIfPresent(Date.self, forKey: .updatedAt)
         bchPusd = try? c.decodeIfPresent(Double.self, forKey: .bchPusd)
         holdings = (try? c.decodeIfPresent(LossyArray<Holding>.self, forKey: .holdings))?.items ?? []
+        basketTarget = (try? c.decodeIfPresent([String: Double].self, forKey: .basketTarget)) ?? [:]
         positions = (try? c.decodeIfPresent(LossyArray<Position>.self, forKey: .positions))?.items ?? []
         agents = (try? c.decodeIfPresent(LossyArray<AgentStatus>.self, forKey: .agents))?.items ?? []
         stats = (try? c.decodeIfPresent(Stats.self, forKey: .stats)) ?? Stats()
@@ -135,7 +138,7 @@ public struct DeskState: Decodable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats, grokBot, runner
+        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, basketTarget, positions, agents, stats, grokBot, runner
         case frozen, liveSince, depositsPusd, totalDepositedPusd
         case cycleRunning, activeRole, activeSince, step, cycleBanner
     }
@@ -176,6 +179,15 @@ public struct Holding: Decodable, Identifiable, Hashable, Sendable {
     public var valuePusd: Double?
 
     public var id: String { asset }
+
+    /// Human-readable quantity from on-chain base units.
+    public var displayAmount: String {
+        switch asset {
+        case "bch": return String(format: "%.8f BCH", amount / 1e8)
+        case "pusd": return String(format: "%.2f PUSD", amount / 100)
+        default: return "\(Int64(amount).formatted()) \(symbol)"
+        }
+    }
 
     public init(asset: String, symbol: String, amount: Double, valuePusd: Double?) {
         self.asset = asset

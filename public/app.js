@@ -83,12 +83,27 @@ async function loadState() {
         .join("")}</table>`
     : `<p class="empty">No open positions.</p>`;
 
-  $("holdings").innerHTML = s.holdings.length
-    ? `<table><tr><th>Asset</th><th class="num">Value (PUSD)</th></tr>${s.holdings
-        .sort((a, b) => b.value_pusd - a.value_pusd)
-        .map((h) => `<tr><td>${esc(h.symbol)}</td><td class="num">${fmt(h.value_pusd)}</td></tr>`)
-        .join("")}</table>`
-    : `<p class="empty">Wallet opens on the first cycle.</p>`;
+  $("holdings").innerHTML = s.holdings.length ? holdingsTable(s) : `<p class="empty">Wallet opens on the first cycle.</p>`;
+}
+
+function holdingsTable(s) {
+  const rows = [...s.holdings].sort((a, b) => (b.value_pusd ?? 0) - (a.value_pusd ?? 0));
+  const total = rows.reduce((t, h) => t + (h.value_pusd ?? 0), 0);
+  const target = s.basket_target || {};
+  const pos = Object.fromEntries((s.positions || []).map((p) => [p.token_id, p]));
+  // On-chain base units: BCH in sats, PUSD in cents, CashTokens raw.
+  const qty = (h) => (h.asset === "bch" ? fmt(h.amount / 1e8, 8) : h.asset === "pusd" ? fmt(h.amount / 100) : Number(h.amount).toLocaleString());
+  const note = (h) => {
+    if (h.asset === "bch") return "fee reserve";
+    if (h.asset === "pusd") return "cash";
+    const p = pos[h.asset];
+    return p ? `#${p.id} · cost ${fmt(p.cost_pusd)}` : "";
+  };
+  const share = (h) => (total > 0 ? ((h.value_pusd ?? 0) / total) * 100 : null);
+  const tgt = (h) => (target[h.symbol] != null ? `${fmt(target[h.symbol] * 100, 0)}%` : "–");
+  return `<table><tr><th>Asset</th><th class="num">Amount</th><th class="num">Value (PUSD)</th><th class="num">Share</th><th class="num">Target</th></tr>${rows
+    .map((h) => `<tr><td>${esc(h.symbol)} <small class="hint">${esc(note(h))}</small></td><td class="num">${qty(h)}</td><td class="num">${fmt(h.value_pusd)}</td><td class="num">${fmt(share(h), 1)}%</td><td class="num">${tgt(h)}</td></tr>`)
+    .join("")}<tr><td><b>Total</b></td><td></td><td class="num"><b>${fmt(total)}</b></td><td class="num">100%</td><td></td></tr></table>`;
 }
 
 async function loadEvents() {
