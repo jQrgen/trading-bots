@@ -1,6 +1,8 @@
 # Setup guide for an AI agent (Grok)
 
-If you are a Grok bot asked to set up or run this trading team, read this file first, then `bots/MARKET.md` and `bots/STRATEGY.md`.
+If you are a Grok bot asked to set up or run this trading team, read this file first.
+
+**GitHub holds code only. All data lives in the Cloudflare D1 database**: strategy, market notes, agent roles, team graph, risk limits, trades, positions, proposals, every Grok prompt and reply, scorecards, lessons and market history. The `seed/` folder holds starter defaults that are copied into D1 once, on first run; after that, D1 is the source of truth.
 
 ## What this repo is
 
@@ -8,12 +10,10 @@ A six-agent trading desk for the Cauldron DEX (Bitcoin Cash). It runs entirely o
 
 | Piece | Where |
 |---|---|
-| Agent roles (your prompts) | `bots/*/ROLE.md`, shared rules in `bots/SHARED.md`, market notes in `bots/MARKET.md` |
-| Owner's strategy (the only human input) | `bots/STRATEGY.md` |
-| Team graph | `graph/team.yaml` |
+| Strategy, risk limits, market notes, roles, team graph | D1 table `knowledge` (versioned in `knowledge_history`), seeded from `seed/` |
+| Trades, positions, proposals, events, Grok calls, scorecards, lessons, market ticks | D1, schema in `migrations/` |
 | 15-minute trading loop | `src/loop.ts` (Cloudflare Worker cron) |
-| Hard risk limits | `src/config.ts` → `RISK` (code, not prompts) |
-| Database | Cloudflare D1, schema in `migrations/` |
+| Risk engine | `src/risk.ts`, enforced in code with limits read from D1 |
 | Trading desk website | `public/` served by the same Worker |
 | Auto-deploy on every push | `.github/workflows/deploy.yml` |
 
@@ -42,9 +42,13 @@ Every push to `main` after that is typechecked, tested, migrated, deployed, and 
 
 ## Changing how the team trades
 
-- **Strategy** (allocation, style, appetite): edit `bots/STRATEGY.md` and push.
-- **An agent's behaviour**: edit `bots/<agent>/ROLE.md` and push.
-- **Hard limits** (position size, minimum liquidity, loss halt): edit `RISK` in `src/config.ts`, run `npm test`, and push.
+The only human input is strategy, and you change it on the trading desk, not in GitHub:
+
+1. Open the desk and click **Owner login** at the bottom. Enter the `ADMIN_TOKEN`.
+2. Under **Team knowledge**, pick *Owner's strategy*, *Hard risk limits*, the market notes or an agent's role, and click **Edit**.
+3. Save. Risk limits are validated before saving. Every version is kept in the History view. The team uses the change from the next cycle.
+
+Or use the API: `POST /api/admin/knowledge` with `{"key": "strategy", "body": "..."}` and the bearer token.
 
 ## Owner controls
 
@@ -59,7 +63,18 @@ curl -X POST "$DESK_URL/api/admin/lesson" -H "authorization: Bearer $ADMIN_TOKEN
 
 ## Read API (no auth; used by the website and the Apple app)
 
-`GET /api/state`, `/api/events?after=<id>&limit=`, `/api/snapshots?days=N`, `/api/trades`, `/api/positions`, `/api/journal`, `/api/lessons`. All data lives in D1 and can also be queried directly:
+| Path | Returns |
+|---|---|
+| `/api/state` | totals, holdings, open positions, agent statuses, win rate |
+| `/api/team` | team graph with live agent status |
+| `/api/knowledge`, `/api/knowledge/<key>/history` | everything the bots read, with versions |
+| `/api/risk-limits` | the hard limits in force |
+| `/api/scorecard`, `/api/scorecards?days=N` | 30-day performance by horizon and signal |
+| `/api/proposals` | every trade idea and its outcome |
+| `/api/agent-calls`, `/api/agent-calls/<id>` | every Grok prompt and reply |
+| `/api/events?after=<id>`, `/api/trades`, `/api/positions`, `/api/snapshots?days=N`, `/api/journal`, `/api/lessons` | activity, fills, positions, balance history, journal |
+
+Everything can also be queried directly:
 
 ```bash
 npx wrangler d1 execute trading-desk --remote --command "SELECT * FROM trades ORDER BY id DESC LIMIT 20"
@@ -69,7 +84,8 @@ npx wrangler d1 execute trading-desk --remote --command "SELECT * FROM trades OR
 
 - Never commit secrets, private keys, or seed phrases. Keys are never part of this repo.
 - Never switch to live trading or add signing code without the owner's explicit approval.
-- Never loosen `RISK` limits on your own; that's an owner decision.
+- Never loosen the risk limits on your own; that's an owner decision.
+- Never put data in the repo. Data goes in D1.
 - Run `npm run typecheck` and `npm test` before pushing.
 
 ## Manual deploy (alternative)
@@ -85,7 +101,7 @@ npm run deploy
 
 ```bash
 node test/mock/indexer.mjs &                         # fake Cauldron indexer
-printf 'INDEXER_URL="http://127.0.0.1:8788/cauldron"\nADMIN_TOKEN="dev"\n' > .dev.vars
+printf 'INDEXER_URL="http://127.0.0.1:8788/cauldron"\nADMIN_TOKEN="dev"\nXAI_API_KEY="x"\nXAI_BASE_URL="http://127.0.0.1:8788/xai"\n' > .dev.vars  # fake Grok too
 npm run db:migrate:local
 npm run dev                                          # http://localhost:8787
 curl localhost:8787/__scheduled                      # run one cycle

@@ -1,5 +1,6 @@
 import type { Env } from "./config";
 import { runCycle, runJournal } from "./loop";
+import { loadKnowledge, parseRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
@@ -34,6 +35,42 @@ export default {
       if (p === "/api/trades") return json((await env.DB.prepare("SELECT * FROM trades ORDER BY id DESC LIMIT 500").all()).results);
       if (p === "/api/positions") return json((await env.DB.prepare("SELECT * FROM positions ORDER BY id DESC LIMIT 500").all()).results);
       if (p === "/api/journal") return json((await env.DB.prepare("SELECT * FROM journal ORDER BY id DESC LIMIT 60").all()).results);
+      if (p === "/api/knowledge") {
+        await seedKnowledge(env);
+        return json((await env.DB.prepare("SELECT key, title, kind, format, body, version, updated_by, updated_at FROM knowledge ORDER BY kind, key").all()).results);
+      }
+      const hist = p.match(/^\/api\/knowledge\/([^/]+)\/history$/);
+      if (hist) return json((await env.DB.prepare("SELECT version, body, updated_by, updated_at FROM knowledge_history WHERE key = ? ORDER BY version DESC LIMIT 50").bind(decodeURIComponent(hist[1])).all()).results);
+      if (p === "/api/team") {
+        await seedKnowledge(env);
+        const team = JSON.parse((await loadKnowledge(env)).get("team") ?? "{}") as { agents?: { id: string }[] };
+        const status = new Map((await env.DB.prepare("SELECT agent, status, updated_at FROM agent_status").all<{ agent: string; status: string; updated_at: number }>()).results.map((r) => [r.agent, r]));
+        return json({ ...team, agents: (team.agents ?? []).map((a) => ({ ...a, status: status.get(a.id)?.status ?? null, status_at: status.get(a.id)?.updated_at ?? null })) });
+      }
+      if (p === "/api/risk-limits") return json(parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}"));
+      if (p === "/api/scorecard") {
+        const row = await env.DB.prepare("SELECT ts, window_days, data FROM scorecards ORDER BY ts DESC LIMIT 1").first<{ ts: number; window_days: number; data: string }>();
+        return json(row ? { ts: row.ts, window_days: row.window_days, ...JSON.parse(row.data) } : null);
+      }
+      if (p === "/api/scorecards") {
+        const days = Math.min(Number(url.searchParams.get("days") ?? 30), 365);
+        const rows = await env.DB.prepare("SELECT ts, window_days, data FROM scorecards WHERE ts >= ? ORDER BY ts").bind(Date.now() - days * 86400000).all<{ ts: number; window_days: number; data: string }>();
+        return json(rows.results.map((r) => ({ ts: r.ts, window_days: r.window_days, ...JSON.parse(r.data) })));
+      }
+      if (p === "/api/proposals") {
+        const limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 500);
+        return json((await env.DB.prepare("SELECT * FROM proposals ORDER BY ts DESC LIMIT ?").bind(limit).all()).results);
+      }
+      if (p === "/api/agent-calls") {
+        const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 200);
+        const agent = url.searchParams.get("agent");
+        const q = agent
+          ? env.DB.prepare("SELECT id, ts, cycle, agent, model, search, input, output, error, ms FROM agent_calls WHERE agent = ? ORDER BY id DESC LIMIT ?").bind(agent, limit)
+          : env.DB.prepare("SELECT id, ts, cycle, agent, model, search, input, output, error, ms FROM agent_calls ORDER BY id DESC LIMIT ?").bind(limit);
+        return json((await q.all()).results);
+      }
+      const call = p.match(/^\/api\/agent-calls\/(\d+)$/);
+      if (call) return json(await env.DB.prepare("SELECT * FROM agent_calls WHERE id = ?").bind(Number(call[1])).first());
       if (p === "/api/lessons") return json((await env.DB.prepare("SELECT * FROM lessons ORDER BY id DESC LIMIT 200").all()).results);
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
       return env.ASSETS.fetch(req);
@@ -69,6 +106,18 @@ async function admin(req: Request, env: Env, ctx: ExecutionContext, p: string) {
     await env.DB.prepare("INSERT INTO events (ts, agent, kind, message, data) VALUES (?, 'desk', 'deploy', ?, ?)").bind(Date.now(), `Repo update ${sha} deployed: ${message}`, JSON.stringify({ files })).run();
     return json({ ok: true });
   }
+  if (p === "/api/admin/knowledge") {
+    if (typeof body.key !== "string" || typeof body.body !== "string") return json({ error: "need key and body" }, 400);
+    try {
+      await seedKnowledge(env);
+      const version = await saveKnowledge(env, body.key, body.body, "owner");
+      await env.DB.prepare("INSERT INTO events (ts, agent, kind, message) VALUES (?, 'desk', 'knowledge', ?)").bind(Date.now(), `Owner updated "${body.key}" (version ${version}). The team uses it from the next cycle.`).run();
+      return json({ ok: true, version });
+    } catch (e) {
+      return json({ error: (e as Error).message }, 400);
+    }
+  }
+  if (p === "/api/admin/check") return json({ ok: true });
   if (p === "/api/admin/lesson") {
     const status = body.status === "active" || body.status === "rejected" ? body.status : null;
     if (!status || typeof body.id !== "number") return json({ error: "need id and status active|rejected" }, 400);

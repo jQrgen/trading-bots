@@ -2,7 +2,7 @@ name = "cauldron-trading-desk"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
-# Bot role files are bundled as text so bots/ stays the single source of truth.
+# Seed knowledge (starter strategy, market notes, roles) is bundled as text. D1 is the source of truth at runtime.
 rules = [{ type = "Text", globs = ["**/*.md"], fallthrough = true }]
 
 [assets]

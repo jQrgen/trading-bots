@@ -1,8 +1,8 @@
 # Desk strategy
 
-This is the owner's file. It is the only human input to the trading team.
-Edit it on GitHub; the deploy action ships it and every agent reads it on the next cycle.
-Hard risk limits live in `src/config.ts` (RISK) and are changed the same way.
+This is the owner's strategy. It is the only human input to the trading team.
+It lives in the desk database; the owner edits it on the trading desk and every agent reads it on the next cycle.
+The hard risk limits are a separate entry ("risk-limits") edited the same way.
 
 ## Goal
 

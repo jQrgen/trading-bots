@@ -1,4 +1,5 @@
 import type { Env, Horizon } from "./config";
+import type { Proposal } from "./risk";
 
 export type Agent = "nova" | "orin" | "vela" | "kade" | "rune" | "zara" | "desk";
 
@@ -59,6 +60,20 @@ export class Ledger {
       .bind(p.token_id, p.symbol, p.horizon, p.amount, p.cost_pusd, p.entry_price_pusd, p.target_pct, p.stop_pct, p.signal, p.thesis, Date.now())
       .run();
     return Number(r.meta.last_row_id);
+  }
+
+  async saveProposal(p: Proposal, agent: string) {
+    await this.db
+      .prepare("INSERT OR REPLACE INTO proposals (id, ts, cycle, agent, action, token_id, symbol, horizon, size_pct, target_pct, stop_pct, signal, thesis, bull_case, bear_case, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed')")
+      .bind(p.id, Date.now(), this.cycle, agent, p.action, p.token_id, p.symbol, p.horizon, p.size_pct ?? null, p.target_pct ?? null, p.stop_pct ?? null, p.signal ?? null, p.thesis ?? null, p.bull_case ?? null, p.bear_case ?? null)
+      .run();
+  }
+
+  async updateProposal(id: string, f: { status: string; allowed_pusd?: number; risk_notes?: string; decision_note?: string; position_id?: number | null }) {
+    await this.db
+      .prepare("UPDATE proposals SET status = ?, allowed_pusd = COALESCE(?, allowed_pusd), risk_notes = COALESCE(?, risk_notes), decision_note = COALESCE(?, decision_note), position_id = COALESCE(?, position_id) WHERE id = ?")
+      .bind(f.status, f.allowed_pusd ?? null, f.risk_notes ?? null, f.decision_note ?? null, f.position_id ?? null, id)
+      .run();
   }
 
   async recordTrade(t: { side: "buy" | "sell"; token_id: string; symbol: string; amount: number; pusd: number; price_pusd: number; impact_pct: number; estimated: boolean; position_id: number | null; reason: string }) {

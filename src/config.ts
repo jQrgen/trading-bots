@@ -8,8 +8,9 @@ export const ROUTER_FEE = 0.001;
 
 export type Horizon = "short" | "medium" | "long";
 
-// Hard limits. Agents can't change these; edit and redeploy to change them.
-export const RISK = {
+// Default hard limits. The live values are in D1 (knowledge key "risk-limits"), edited by the owner
+// on the desk. Agents can't change them.
+export const RISK_DEFAULTS = {
   maxPositionPct: { short: 3, medium: 10, long: 30 } as Record<Horizon, number>,
   maxBookPct: { short: 15, medium: 25, long: 60 } as Record<Horizon, number>,
   minTradePusd: 5,
@@ -24,6 +25,8 @@ export const RISK = {
   maxTradesPerCycle: 3,
 };
 
+export type RiskLimits = typeof RISK_DEFAULTS;
+
 export interface Env {
   DB: D1Database;
   ASSETS: Fetcher;
@@ -35,4 +38,5 @@ export interface Env {
   JOURNAL_HOUR_UTC: string;
   INDEXER_URL?: string;
   ROUTER_URL?: string;
+  XAI_BASE_URL?: string;
 }

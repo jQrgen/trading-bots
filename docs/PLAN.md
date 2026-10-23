@@ -7,9 +7,11 @@ _Status: v0.2, 2026-10-23. Owner: Jørgen S. Notland._
 - Home asset is **ParyonUSD (PUSD)**, category `2469acc5…a02544`.
 - Bots run as **Grok via the xAI API from a Cloudflare Worker** (cron every 15 min). Vela uses Grok's X and web search, so no X API key is needed.
 - Desk, API and database (**D1**) all live on **Cloudflare**. D1 records every trade, position, lesson, snapshot, market tick and bot message.
-- **Fully automated trading.** The only human input is strategy: `bots/STRATEGY.md`, role files, and hard limits in `src/config.ts`. Pushing to `main` deploys through a GitHub Action and announces the change to the team.
+- **Fully automated trading.** The only human input is strategy, edited on the desk.
+- **GitHub is for code only; all data lives in D1**: strategy, risk limits, market notes, roles and team graph (versioned), trades, positions, proposals, every Grok prompt and reply, scorecards, lessons and market ticks. `seed/` holds starter defaults copied in on first run.
+- Deploys run entirely from GitHub Actions: create or find D1, migrate, deploy, sync secrets, announce, run a cycle.
 - The repo is written so a Grok bot can read `GROK_SETUP.md` and set everything up.
-- Market pitfalls the bots must know are in `bots/MARKET.md`.
+- Market pitfalls the bots must know are in the "market" knowledge entry (seeded from `seed/MARKET.md`).
 - Launch on 2026-10-24 in **paper mode**. Live trading with keys comes only after the owner's explicit approval.
 - A native Apple app (iOS, macOS, tvOS) is built in a separate thread against the same API.
 
@@ -95,17 +97,17 @@ Reporting graph:
 
 The 24/7 loop: **Orin scans → Vela finds setups → Kade risk-checks → Nova approves → Rune executes → Zara logs, learns and alerts.**
 
-Each bot's skill and role live in the repo as files (`bots/<name>/ROLE.md`, `bots/<name>/skills/*.md`, `bots/<name>/tools.json`) so they're versioned and editable, and the graph lives in `graph/team.yaml`.
+Each bot's role, the shared rules, the market notes and the team graph live in D1 (`knowledge`, versioned in `knowledge_history`), so they're editable on the desk and inspectable by humans. Starter versions are in `seed/`.
 
 ## 4b. Self-improvement loop
 
 The team learns from its own results without a human in the loop for trading:
 
 1. **Every trade is recorded** in D1 with its horizon and the signal type that triggered it (`trades`, `positions`).
-2. **Scorecard**: each cycle, win rate and P&L for the last 30 days by horizon and by signal type are computed (`src/scorecard.ts`) and given to Orin, Vela and Nova. They lean into what works and demand stronger cases for what doesn't.
+2. **Scorecard** (stored hourly in `scorecards`): each cycle, win rate and P&L for the last 30 days by horizon and by signal type are computed (`src/scorecard.ts`) and given to Orin, Vela and Nova. They lean into what works and demand stronger cases for what doesn't.
 3. **Adaptive sizing (code)**: a horizon that keeps losing (5+ trades, negative P&L) gets its bet size cut to 75%, 50% or 25% until it recovers. It can only shrink, never grow past the hard limits.
 4. **Lessons**: Zara's daily journal writes lessons that are fed straight back to Vela and Nova. The owner can reject a lesson.
-5. **Strategy suggestions**: Zara may suggest one concrete change to `bots/STRATEGY.md` backed by the scorecard. The owner decides and pushes it; the deploy action tells the team.
+5. **Strategy suggestions**: Zara may suggest one concrete change to the strategy, backed by the scorecard. The owner decides and edits it on the desk.
 6. **Market memory**: `market_ticks` stores price and liquidity for the top tokens every cycle, so liquidity trends feed Orin's scan and the history can be used for backtests later.
 
 ## 5. Strategy book (initial)
@@ -141,7 +143,8 @@ Read-only for visitors, with an owner login for controls. Pages:
 - **Agent comms**: the six agents as cards with live status ("scanning 214 tokens", "waiting for Kade"), and a chat-style feed of their messages to each other.
 - **Activity log**: every scan, thesis, rug check, dev-wallet check, approval, veto, order and fill, with links to the tx on a block explorer.
 - **Positions**: open positions with entry, current price, target, stop, horizon, owner agent.
-- **Team graph**: the reporting structure rendered from `graph/team.yaml`.
+- **Team knowledge**: strategy, risk limits, market notes, roles and the team graph, with history and an owner editor.
+- **Proposals, scorecard and Grok calls**: every idea and its outcome, 30-day performance, and every prompt and reply.
 - **Journal**: Zara's daily reports, post-mortems and lessons.
 
 Updates stream live via Server-Sent Events.
@@ -149,14 +152,14 @@ Updates stream live via Server-Sent Events.
 ## 8. Repo layout (github.com/jQrgen/trading-bots, private)
 
 ```
-docs/            PLAN.md, ARCHITECTURE.md, RUNBOOK.md
-graph/           team.yaml (agents, edges, permissions)
-bots/<name>/     ROLE.md, skills/*.md, tools.json
-packages/core/   scheduler, bus, ledger, risk engine
-packages/market/ indexer + router clients
-packages/exec/   quote → build → verify → sign → broadcast
-packages/signer/ isolated signer (live mode only)
-apps/desk/       trading desk website
+docs/            PLAN.md
+seed/            starter knowledge copied into D1 on first run (strategy, market notes, roles, team.json)
+src/             Worker: loop, risk engine, ledger, knowledge, Grok client, Cauldron clients, API
+migrations/      D1 schema
+public/          trading desk website
+test/            unit tests and a mock indexer/Grok for local runs
+apps/apple/      SwiftUI app (iOS, macOS, tvOS), built in its own thread
+.github/         deploy workflow
 ```
 
 ## 9. Milestones

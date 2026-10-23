@@ -1,4 +1,4 @@
-import { RISK, type Horizon } from "./config";
+import { RISK_DEFAULTS, type Horizon, type RiskLimits } from "./config";
 
 export interface Proposal {
   id: string;
@@ -38,7 +38,7 @@ export interface RiskVerdict {
 }
 
 /** Deterministic pre-trade checks. Can only shrink or reject a proposal, never enlarge it. */
-export function checkBuy(p: Proposal, facts: TokenFacts | undefined, book: Book, halted: boolean): RiskVerdict {
+export function checkBuy(p: Proposal, facts: TokenFacts | undefined, book: Book, halted: boolean, RISK: RiskLimits = RISK_DEFAULTS): RiskVerdict {
   const reasons: string[] = [];
   if (halted) reasons.push("desk is halted");
   if (book.dayChangePct <= -RISK.dailyLossHaltPct) reasons.push(`down ${book.dayChangePct.toFixed(1)}% in 24h, buying paused`);
