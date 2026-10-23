@@ -12,7 +12,7 @@ struct AgentsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 TeamGraphView()
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: Metrics.cardMinWidth), spacing: Metrics.spacing)], spacing: Metrics.spacing) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: Metrics.agentTileMinWidth), spacing: Metrics.spacing, alignment: .top)], alignment: .leading, spacing: Metrics.spacing) {
                     ForEach(store.agentCards) { card in
                         NavigationLink(value: card.member) {
                             AgentTile(card: card)

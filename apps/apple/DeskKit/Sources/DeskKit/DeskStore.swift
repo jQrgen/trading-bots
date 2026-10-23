@@ -23,6 +23,8 @@ public final class DeskStore {
     public private(set) var files: [BotFile] = []
     public private(set) var liquidity: [LiquidityPosition] = []
     public private(set) var reviews: [TradeReview] = []
+    /// The desk's own wallet, when the Worker has one.
+    public private(set) var wallet: WalletInfo?
     /// Latest tick per token, largest pools first.
     public private(set) var markets: [MarketTick] = []
     /// Daily-ish scorecards for the last 90 days, oldest first.
@@ -64,6 +66,7 @@ public final class DeskStore {
         files = []
         liquidity = []
         reviews = []
+        wallet = nil
         markets = []
         scorecardHistory = []
         lastRefresh = nil
@@ -101,6 +104,7 @@ public final class DeskStore {
         async let filesTask = capture { try await service.files() }
         async let liquidityTask = capture { try await service.liquidity() }
         async let reviewsTask = capture { try await service.reviews() }
+        async let walletTask = capture { try await service.wallet() }
         async let marketsTask = capture { try await service.markets() }
         async let scorecardsTask = capture { try await service.scorecards(days: 90) }
 
@@ -125,6 +129,8 @@ public final class DeskStore {
         switch await filesTask { case .success(let v): files = v.sorted { $0.updatedAt > $1.updatedAt }; case .failure(let e): note(e) }
         switch await liquidityTask { case .success(let v): liquidity = v; case .failure(let e): note(e) }
         switch await reviewsTask { case .success(let v): reviews = v.sorted { $0.ts > $1.ts }; case .failure(let e): note(e) }
+        // Older desks have no /api/wallet, so a failure here isn't reported.
+        if case .success(let v) = await walletTask { wallet = v }
         switch await marketsTask { case .success(let v): markets = v; case .failure(let e): note(e) }
         switch await scorecardsTask {
         case .success(let v): scorecardHistory = v.sorted { ($0.ts ?? .distantPast) < ($1.ts ?? .distantPast) }
@@ -205,10 +211,18 @@ public final class DeskStore {
 
     /// Change in total value over the last `hours`, from the snapshot history.
     public func change(overHours hours: Double, now: Date = Date()) -> Double? {
-        guard let latest = state?.totalPusd ?? snapshots.last?.totalPusd else { return nil }
+        // Live snapshots are net of the owner's deposits while state.total_pusd is the raw wallet value, so compare snapshots with snapshots.
+        let latestValue = isLive ? snapshots.last?.totalPusd : (state?.totalPusd ?? snapshots.last?.totalPusd)
+        guard let latest = latestValue else { return nil }
         let cutoff = now.addingTimeInterval(-hours * 3600)
         guard let base = snapshots.last(where: { $0.ts <= cutoff }) ?? snapshots.first, base.ts <= now else { return nil }
         return latest - base.totalPusd
+    }
+
+    /// The 24h card: the desk's own figure (net of deposits and withdrawals) when it sends one.
+    public var dayChange: Double? {
+        if let stats = state?.stats, stats.hasChange24h { return stats.change24hPusd }
+        return change(overHours: 24)
     }
 
     /// Change over the range shown in the chart.

@@ -62,7 +62,7 @@ struct TradeDetailView: View {
     var body: some View {
         List {
             Section {
-                LabeledContent("Side", value: trade.side.uppercased())
+                LabeledContent("Side", value: trade.sideLabel)
                 LabeledContent("Token", value: trade.symbol)
                 LabeledContent("PUSD", value: Format.pusd(trade.pusd))
                 LabeledContent("Price", value: Format.pusd(trade.pricePusd, decimals: 8) + " PUSD")
@@ -77,11 +77,16 @@ struct TradeDetailView: View {
             if let reason = trade.reason, !reason.isEmpty {
                 Section("Reason") { Text(reason) }
             }
+            if let txid = trade.txid {
+                Section("Transaction") {
+                    ExplorerLink(text: txid)
+                }
+            }
             Section("Token id") {
                 Text(trade.tokenId).font(.system(.footnote, design: .monospaced))
             }
         }
-        .navigationTitle("\(trade.side.capitalized) \(trade.symbol)")
+        .navigationTitle("\(trade.sideLabel.capitalized) \(trade.symbol)")
     }
 }
 

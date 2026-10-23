@@ -29,6 +29,13 @@ public struct DeskState: Decodable, Sendable {
     public var grokBot: GrokBotStatus?
     /// The single routine that plays every role. Absent on older desks.
     public var runner: RunnerStatus?
+    /// The owner's kill switch: no on-chain transactions at all while set.
+    public var frozen: Bool
+    public var liveSince: Date?
+    /// Owner's net deposits since going live. They count as capital, not profit, and start_pusd includes them.
+    public var depositsPusd: Double
+    /// Everything the owner has put in: the funding at Go live plus top-ups minus withdrawals. P&L is measured against it.
+    public var totalDepositedPusd: Double?
     /// True while a cycle (or Zara's journal) is in progress.
     public var cycleRunning: Bool
     /// Role working right now: orin, vela, kade, nova, rune or zara.
@@ -44,12 +51,19 @@ public struct DeskState: Decodable, Sendable {
         public var wins: Int
         public var winRate: Double?
         public var realizedPusd: Double?
+        /// Change in value over 24h net of deposits and withdrawals. Nil until there's a snapshot to compare with.
+        public var change24hPusd: Double?
+        /// False on desks that don't send change_24h_pusd yet; the app then works it out from snapshots.
+        public var hasChange24h: Bool
 
-        public init(closed: Int = 0, wins: Int = 0, winRate: Double? = nil, realizedPusd: Double? = nil) {
+        public init(closed: Int = 0, wins: Int = 0, winRate: Double? = nil, realizedPusd: Double? = nil,
+                    change24hPusd: Double? = nil, hasChange24h: Bool = false) {
             self.closed = closed
             self.wins = wins
             self.winRate = winRate
             self.realizedPusd = realizedPusd
+            self.change24hPusd = change24hPusd
+            self.hasChange24h = hasChange24h || change24hPusd != nil
         }
 
         public init(from decoder: Decoder) throws {
@@ -58,14 +72,19 @@ public struct DeskState: Decodable, Sendable {
             wins = (try? c.decodeIfPresent(Int.self, forKey: .wins)) ?? 0
             winRate = try? c.decodeIfPresent(Double.self, forKey: .winRate)
             realizedPusd = try? c.decodeIfPresent(Double.self, forKey: .realizedPusd)
+            // convertFromSnakeCase spells "change_24h_pusd" as "change24HPusd".
+            let key: CodingKeys = c.contains(.change24HPusd) ? .change24HPusd : .change24hPusd
+            hasChange24h = c.contains(key)
+            change24hPusd = try? c.decodeIfPresent(Double.self, forKey: key)
         }
 
-        enum CodingKeys: String, CodingKey { case closed, wins, winRate, realizedPusd }
+        enum CodingKeys: String, CodingKey { case closed, wins, winRate, realizedPusd, change24HPusd, change24hPusd }
     }
 
     public init(mode: TradingMode, halted: Bool, startPusd: Double?, totalPusd: Double?, updatedAt: Date?, bchPusd: Double?,
                 holdings: [Holding], positions: [Position], agents: [AgentStatus], stats: Stats, grokBot: GrokBotStatus? = nil,
-                runner: RunnerStatus? = nil, cycleRunning: Bool = false, activeRole: String? = nil, activeSince: Date? = nil,
+                runner: RunnerStatus? = nil, frozen: Bool = false, liveSince: Date? = nil, depositsPusd: Double = 0,
+                totalDepositedPusd: Double? = nil, cycleRunning: Bool = false, activeRole: String? = nil, activeSince: Date? = nil,
                 step: String? = nil, cycleBanner: String? = nil) {
         self.mode = mode
         self.halted = halted
@@ -79,6 +98,10 @@ public struct DeskState: Decodable, Sendable {
         self.stats = stats
         self.grokBot = grokBot
         self.runner = runner
+        self.frozen = frozen
+        self.liveSince = liveSince
+        self.depositsPusd = depositsPusd
+        self.totalDepositedPusd = totalDepositedPusd
         self.cycleRunning = cycleRunning
         self.activeRole = activeRole
         self.activeSince = activeSince
@@ -100,6 +123,10 @@ public struct DeskState: Decodable, Sendable {
         stats = (try? c.decodeIfPresent(Stats.self, forKey: .stats)) ?? Stats()
         grokBot = try? c.decodeIfPresent(GrokBotStatus.self, forKey: .grokBot)
         runner = try? c.decodeIfPresent(RunnerStatus.self, forKey: .runner)
+        frozen = (try? c.decodeIfPresent(FlexBool.self, forKey: .frozen))?.value ?? false
+        liveSince = try? c.decodeIfPresent(Date.self, forKey: .liveSince)
+        depositsPusd = (try? c.decodeIfPresent(Double.self, forKey: .depositsPusd)) ?? 0
+        totalDepositedPusd = try? c.decodeIfPresent(Double.self, forKey: .totalDepositedPusd)
         cycleRunning = (try? c.decodeIfPresent(FlexBool.self, forKey: .cycleRunning))?.value ?? false
         activeRole = try? c.decodeIfPresent(String.self, forKey: .activeRole)
         activeSince = try? c.decodeIfPresent(Date.self, forKey: .activeSince)
@@ -109,11 +136,15 @@ public struct DeskState: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats, grokBot, runner
+        case frozen, liveSince, depositsPusd, totalDepositedPusd
         case cycleRunning, activeRole, activeSince, step, cycleBanner
     }
 
     /// Banner for the desk. Prefers the Worker's `cycle_banner`, then builds the same phrase.
     public var deskBanner: String {
+        if !cycleRunning, let runner, runner.isOverdue() {
+            return runner.nextRunAt.map { "idle, next run overdue (was due \(RunnerStatus.clock($0)))" } ?? "idle, next run overdue"
+        }
         if let cycleBanner, !cycleBanner.isEmpty { return cycleBanner }
         if cycleRunning, let step {
             if let n = runner?.cycle { return "Cycle \(n) running, step \(step)" }
@@ -265,9 +296,11 @@ public struct RunnerStatus: Decodable, Hashable, Sendable {
     public var updatedAt: Date?
     public var nextRunAt: Date?
     public var nextJournalAt: Date?
+    /// The desk's flag for a run more than 3 minutes late with no cycle going. Nil on desks that don't send it.
+    public var overdue: Bool?
 
     public init(name: String, brain: String? = nil, cycle: Int? = nil, state: String, updatedAt: Date? = nil,
-                nextRunAt: Date? = nil, nextJournalAt: Date? = nil) {
+                nextRunAt: Date? = nil, nextJournalAt: Date? = nil, overdue: Bool? = nil) {
         self.name = name
         self.brain = brain
         self.cycle = cycle
@@ -275,6 +308,7 @@ public struct RunnerStatus: Decodable, Hashable, Sendable {
         self.updatedAt = updatedAt
         self.nextRunAt = nextRunAt
         self.nextJournalAt = nextJournalAt
+        self.overdue = overdue
     }
 
     public init(from decoder: Decoder) throws {
@@ -286,17 +320,32 @@ public struct RunnerStatus: Decodable, Hashable, Sendable {
         updatedAt = try? c.decodeIfPresent(Date.self, forKey: .updatedAt)
         nextRunAt = try? c.decodeIfPresent(Date.self, forKey: .nextRunAt)
         nextJournalAt = try? c.decodeIfPresent(Date.self, forKey: .nextJournalAt)
+        overdue = (try? c.decodeIfPresent(FlexBool.self, forKey: .overdue))?.value
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, brain, cycle, state, updatedAt, nextRunAt, nextJournalAt
+        case name, brain, cycle, state, updatedAt, nextRunAt, nextJournalAt, overdue
     }
 
     /// Cycle, whether the routine is running, and the next expected times.
-    public var summary: String {
+    public var summary: String { summary(now: Date()) }
+
+    /// True when the next run is more than 3 minutes late and no cycle is going. Uses the desk's flag when it sends one.
+    public func isOverdue(now: Date = Date()) -> Bool {
+        if let overdue { return overdue }
+        guard let next = nextRunAt, state != "running" else { return false }
+        return now.timeIntervalSince(next) > 3 * 60
+    }
+
+    public func summary(now: Date) -> String {
         let cycleText = cycle.map { "cycle \($0)" } ?? "no cycle yet"
         let stateText = state == "running" ? "running" : state == "complete" ? "done" : "waiting"
-        let next = nextRunAt.map { "next run \(Self.clock($0))" } ?? "every 15 min"
+        let next: String
+        if isOverdue(now: now) {
+            next = nextRunAt.map { "next run overdue (was due \(Self.clock($0)))" } ?? "next run overdue"
+        } else {
+            next = nextRunAt.map { "next run \(Self.clock($0))" } ?? "every 15 min"
+        }
         let journal = nextJournalAt.map { "journal \(Self.clock($0))" } ?? "journal 21:00 UTC"
         return "\(name) · \(cycleText) \(stateText) · \(next) · \(journal)"
     }
@@ -370,10 +419,12 @@ public struct Trade: Decodable, Identifiable, Hashable, Sendable {
     public var estimated: Bool
     public var positionId: Int?
     public var reason: String?
+    /// On-chain transaction id, for live fills.
+    public var txid: String?
 
     public init(id: Int, ts: Date, cycle: Int? = nil, mode: TradingMode, side: String, tokenId: String, symbol: String,
                 amount: Double?, pusd: Double, pricePusd: Double?, impactPct: Double?, estimated: Bool,
-                positionId: Int?, reason: String?) {
+                positionId: Int?, reason: String?, txid: String? = nil) {
         self.id = id
         self.ts = ts
         self.cycle = cycle
@@ -388,6 +439,7 @@ public struct Trade: Decodable, Identifiable, Hashable, Sendable {
         self.estimated = estimated
         self.positionId = positionId
         self.reason = reason
+        self.txid = txid
     }
 
     public init(from decoder: Decoder) throws {
@@ -406,14 +458,24 @@ public struct Trade: Decodable, Identifiable, Hashable, Sendable {
         estimated = (try? c.decodeIfPresent(FlexBool.self, forKey: .estimated))?.value ?? false
         positionId = try? c.decodeIfPresent(Int.self, forKey: .positionId)
         reason = try? c.decodeIfPresent(String.self, forKey: .reason)
+        txid = try? c.decodeIfPresent(String.self, forKey: .txid)
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, ts, cycle, mode, side, tokenId, symbol, amount, pusd, pricePusd, impactPct, estimated, positionId, reason
+        case id, ts, cycle, mode, side, tokenId, symbol, amount, pusd, pricePusd, impactPct, estimated, positionId, reason, txid
     }
 
     /// Buying a token or putting liquidity into a pool.
     public var isBuy: Bool { side == "buy" || side == "lp-in" }
+
+    /// BUY, SELL, ADD LIQ, WITHDRAW or CONVERT (a BCH top-up swapped to PUSD).
+    public var sideLabel: String {
+        switch side {
+        case "lp-in": "ADD LIQ"
+        case "lp-out": "WITHDRAW"
+        default: side.uppercased()
+        }
+    }
 }
 
 /// GET /api/snapshots?days=N — balance history, oldest first.

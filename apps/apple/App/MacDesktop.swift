@@ -57,16 +57,19 @@ struct MenuBarPanel: View {
             HStack {
                 Text("Trading Desk").font(.headline)
                 Spacer()
-                ModeBadge(mode: store.state?.mode ?? .paper, halted: store.state?.halted ?? false)
+                ModeBadge(mode: store.state?.mode ?? .paper, halted: store.state?.halted ?? false, frozen: store.state?.frozen ?? false)
             }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(Format.pusd(store.state?.totalPusd)).font(.system(size: 28, weight: .bold, design: .rounded)).monospacedDigit()
                 Text("PUSD").foregroundStyle(.secondary)
             }
             HStack(spacing: 16) {
-                stat("24h", Format.signed(store.change(overHours: 24)), Color.pnl(store.change(overHours: 24)))
+                stat("24h", Format.signed(store.dayChange), Color.pnl(store.dayChange))
                 stat("Since start", Format.signed(store.state?.pnlAllPusd), Color.pnl(store.state?.pnlAllPusd))
                 stat("Win rate", Format.ratio(store.state?.stats.winRate), .primary)
+            }
+            if let total = store.state?.totalDepositedPusd, store.isLive {
+                Text("\(Format.pusd(total)) PUSD deposited in total").font(.caption).foregroundStyle(.secondary)
             }
             Divider()
             ForEach(store.events.prefix(5)) { e in
@@ -244,7 +247,7 @@ struct MacTradesView: View {
             TableColumn("Time", value: \.id) { Text(Format.dateTime($0.ts)).monospacedDigit() }
                 .width(min: 110, ideal: 120)
             TableColumn("Side", value: \.side) { t in
-                Text(t.side.uppercased()).fontWeight(.semibold).foregroundStyle(t.isBuy ? Color.up : Color.down)
+                Text(t.sideLabel).fontWeight(.semibold).foregroundStyle(t.isBuy ? Color.up : Color.down)
             }
             .width(60)
             TableColumn("Token", value: \.symbol)
@@ -259,6 +262,14 @@ struct MacTradesView: View {
             .width(60)
             TableColumn("Mode") { Text($0.mode.rawValue) }
                 .width(50)
+            TableColumn("Tx") { t in
+                if let txid = t.txid, let url = Explorer.url(txid) {
+                    Link("View", destination: url)
+                } else {
+                    Text("–").foregroundStyle(.secondary)
+                }
+            }
+            .width(45)
             TableColumn("Reason") { Text($0.reason ?? "").lineLimit(1).help($0.reason ?? "") }
         }
     }

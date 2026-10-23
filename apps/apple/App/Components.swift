@@ -8,6 +8,7 @@ enum Metrics {
     static let spacing: CGFloat = 40
     static let padding: CGFloat = 32
     static let tileMinWidth: CGFloat = 340
+    static let agentTileMinWidth: CGFloat = 420
     static let cardMinWidth: CGFloat = 560
     static let chartHeight: CGFloat = 380
     static let heroFont: Font = .system(size: 96, weight: .bold, design: .rounded)
@@ -15,6 +16,8 @@ enum Metrics {
     static let spacing: CGFloat = 16
     static let padding: CGFloat = 16
     static let tileMinWidth: CGFloat = 150
+    /// Two agent cards across on iPhone, like the web desk.
+    static let agentTileMinWidth: CGFloat = 160
     static let cardMinWidth: CGFloat = 320
     static let chartHeight: CGFloat = 220
     static let heroFont: Font = .system(size: 44, weight: .bold, design: .rounded)
@@ -125,6 +128,7 @@ struct StatTile: View {
 struct ModeBadge: View {
     var mode: TradingMode
     var halted: Bool
+    var frozen = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -136,6 +140,12 @@ struct ModeBadge: View {
                 Text("HALTED")
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().fill(Color.orange))
+                    .foregroundStyle(.white)
+            }
+            if frozen {
+                Text("FROZEN")
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.purple))
                     .foregroundStyle(.white)
             }
         }
@@ -188,8 +198,8 @@ struct TradeRow: View {
                 .font(.title2)
                 .foregroundStyle(trade.isBuy ? Color.up : Color.down)
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(trade.side.uppercased()) \(trade.symbol)").font(.headline)
-                Text(Format.dateTime(trade.ts) + (trade.mode == .paper ? " · paper" : ""))
+                Text("\(trade.sideLabel) \(trade.symbol)").font(.headline)
+                Text(Format.dateTime(trade.ts) + (trade.mode == .paper ? " · paper" : trade.txid != nil ? " · on-chain" : ""))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -240,7 +250,9 @@ struct StatusBanner: View {
         }
         if let state = store.state {
             let running = state.cycleRunning
-            banner(state.deskBanner, symbol: running ? "bolt.fill" : "clock.arrow.circlepath", tint: running ? .up : .teal)
+            let late = !running && state.runner?.isOverdue() == true
+            banner(state.deskBanner, symbol: running ? "bolt.fill" : late ? "clock.badge.exclamationmark" : "clock.arrow.circlepath",
+                   tint: running ? .up : late ? .orange : .teal)
         }
         GrokBotBanner()
     }
