@@ -23,6 +23,7 @@ const get = (path) => fetch(path, { cache: "no-store" }).then((r) => r.json());
 let events = [];
 let lastEventId = 0;
 let days = 7;
+let liveRole = null;
 
 async function loadState() {
   const s = await get("/api/state");
@@ -45,23 +46,34 @@ async function loadState() {
   $("closed").textContent = `${s.stats.wins}/${s.stats.closed} trades`;
   $("bch").textContent = fmt(s.bch_pusd);
   const r = s.runner;
-  $("runner").textContent = r
-    ? `${r.name || "Cauldron Trader"} · ${r.cycle != null ? `cycle ${r.cycle}` : "no cycle yet"} ${r.state === "running" ? "running" : r.state === "complete" ? "done" : "waiting"} · ${r.overdue ? `next run overdue (was due ${utcClock(r.next_run_at)}; Grok hasn't called since ${ago(r.updated_at)})` : r.next_run_at ? `next run ${utcClock(r.next_run_at)}` : "every 15 min"} · journal ${r.next_journal_at ? utcClock(r.next_journal_at) : "21:00 UTC"}`
-    : "One Cauldron Trader runs every role, in order, every 15 minutes.";
+  const banner = s.cycle_running
+    ? s.cycle_banner
+    : r?.overdue && r.next_run_at
+      ? `idle, next run overdue (was due ${utcClock(r.next_run_at)}; Grok hasn't called since ${ago(r.updated_at)})`
+      : s.cycle_banner || (r?.next_run_at ? `idle, next run ${utcClock(r.next_run_at)}` : "idle, next run every 15 min");
+  $("cyclebar").textContent = banner || "idle, next run every 15 min";
+  $("cyclebar").classList.toggle("on", !!s.cycle_running);
+  liveRole = s.cycle_running ? s.active_role : null;
+  document.querySelectorAll("#teamgraph .node").forEach((n) => n.classList.toggle("running", n.dataset.id === liveRole));
 
   const status = Object.fromEntries(s.agents.map((a) => [a.agent, a]));
+  const cycleNo = s.cycle ?? r?.cycle;
   $("agents").innerHTML = AGENTS.map(([id, role], i) => {
     const st = status[id];
     const last = events.find((e) => e.agent === id);
     const idle = st && /idle,\s*waiting/i.test(st.status);
     const text = !st ? "waiting for first cycle" : idle && last ? last.message : st.status;
-    const when = st?.updated_at ? ago(st.updated_at) : "";
-    return `<div class="agent" style="--c: var(--${id})">
+    const on = liveRole === id;
+    const when = on && s.active_since ? `started ${utcClock(s.active_since)}` : st?.updated_at ? ago(st.updated_at) : "";
+    const body = on
+      ? `<div class="live"><span class="pulse"></span>Running</div><div class="status">Cycle ${cycleNo ?? "–"}${s.step ? ` · ${esc(s.step)}` : ""}</div>`
+      : `<div class="status">${esc(text)}</div>`;
+    return `<div class="agent${on ? " running" : ""}" style="--c: var(--${id})">
       <b>0${i + 1} ${id.toUpperCase()}</b>
       <div class="role">${role}</div>
-      <div class="status">${esc(text)}</div>
+      ${body}
       <div class="when">${esc(when)}</div>
-      <div class="last">${!idle && last ? esc(last.message) : ""}</div>
+      <div class="last">${!on && !idle && last ? esc(last.message) : ""}</div>
     </div>`;
   }).join("");
 
@@ -134,7 +146,7 @@ async function loadChart() {
 async function loadTeam() {
   const t = await get("/api/team");
   const agents = t.agents ?? [];
-  const sig = JSON.stringify(agents.map((a) => [a.id, a.reports_to, a.status]));
+  const sig = JSON.stringify([agents.map((a) => [a.id, a.reports_to, a.status]), liveRole]);
   if ($("teamgraph").dataset.sig === sig) return;
   $("teamgraph").dataset.sig = sig;
   const byId = new Map(agents.map((a) => [a.id, a]));
@@ -164,8 +176,9 @@ async function loadTeam() {
     const p = pos.get(id), a = byId.get(id);
     const name = a ? a.name ?? id : "Owner";
     const sub = a ? a.role : "You: sets strategy";
-    const st = a?.status ? a.status.slice(0, 26) : a ? "" : "";
-    return `<g class="node" style="--c: var(--${esc(id)}, var(--accent))" transform="translate(${p.x - NW / 2},${p.y})">
+    const st = id === liveRole ? "Running" : a?.status ? a.status.slice(0, 26) : a ? "" : "";
+    const running = id === liveRole ? " running" : "";
+    return `<g class="node${running}" data-id="${esc(id)}" style="--c: var(--${esc(id)}, var(--accent))" transform="translate(${p.x - NW / 2},${p.y})">
       <title>${esc([name, sub, a?.status, a?.tools && "Tools: " + a.tools.join(", "), a?.horizons && "Horizons: " + a.horizons.join(", "), a?.veto ? "Has veto" : ""].filter(Boolean).join("\n"))}</title>
       <rect width="${NW}" height="${NH}" rx="8"/>
       <text class="name" x="10" y="18">${esc(name.toUpperCase())}${a?.veto ? " · veto" : ""}</text>
@@ -604,6 +617,8 @@ async function refresh() {
 refresh();
 loadData();
 setInterval(refresh, 15000);
+// Who is working changes mid-cycle, so the banner and role cards poll faster than the rest of the desk.
+setInterval(() => loadState().catch((err) => console.error(err)), 4000);
 // The wallet is read from the chain on each request, so poll it less often.
 loadWallet().catch(() => {});
 setInterval(() => loadWallet().catch(() => {}), 60000);

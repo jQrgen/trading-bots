@@ -137,10 +137,22 @@ public final class DeskStore {
 
     /// Refreshes on a timer until the calling task is cancelled. The interval is re-read each round so Settings changes apply.
     public func poll(every seconds: @escaping () -> Double) async {
+        var nextFull = Date.distantPast
         while !Task.isCancelled {
-            await refresh()
-            try? await Task.sleep(for: .seconds(max(seconds(), 5)))
+            if Date() >= nextFull {
+                await refresh()
+                nextFull = Date().addingTimeInterval(max(seconds(), 5))
+            } else {
+                await refreshLive()
+            }
+            try? await Task.sleep(for: .seconds(4))
         }
+    }
+
+    /// Role and banner only. The full desk still refreshes on the slower timer.
+    public func refreshLive() async {
+        guard !isLoading else { return }
+        if let v = try? await service.state() { state = v }
     }
 
     public func setChartDays(_ days: Int) async {
@@ -168,11 +180,16 @@ public final class DeskStore {
     /// The six agents with their latest status and last thing they said.
     public var agentCards: [AgentCard] {
         let statuses = Dictionary((state?.agents ?? []).map { ($0.agent.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
+        let runningId = state?.cycleRunning == true ? state?.activeRole?.lowercased() : nil
         return team.members.map { m in
-            AgentCard(member: m,
-                      status: statuses[m.id]?.status ?? m.status,
-                      updatedAt: statuses[m.id]?.updatedAt ?? m.statusAt,
-                      lastEvent: events.first { $0.agent.lowercased() == m.id })
+            let on = runningId == m.id
+            return AgentCard(member: m,
+                             status: statuses[m.id]?.status ?? m.status,
+                             updatedAt: on ? state?.activeSince : (statuses[m.id]?.updatedAt ?? m.statusAt),
+                             lastEvent: events.first { $0.agent.lowercased() == m.id },
+                             isRunning: on,
+                             cycle: state?.runner?.cycle,
+                             activeSince: on ? state?.activeSince : nil)
         }
     }
 

@@ -23,7 +23,7 @@ import {
   type Verdict,
 } from "./loop";
 import { configureEndpoints } from "./cauldron";
-import { noteRunning, publishRoleStatus } from "./roles";
+import { clearJournal, markDecisions, noteJournalIfIdle, noteRunning, publishRoleStatus, roleFromThinkingPath, RUN_WINDOW_MS } from "./roles";
 import GROK_BOT from "../GROK_BOT.md";
 import type { Proposal } from "./risk";
 
@@ -51,8 +51,6 @@ import type { Proposal } from "./risk";
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
-
-const CYCLE_TTL_MS = 30 * 60 * 1000;
 
 export const sha256 = async (text: string) =>
   [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -173,6 +171,7 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
     const L = new Ledger(env, await openCycle(env));
     const lessons = Array.isArray(body.lessons) ? body.lessons.map(String).slice(0, 5) : [];
     await recordJournal(env, L, body.journal, lessons, typeof body.strategy_suggestion === "string" ? body.strategy_suggestion : undefined);
+    await clearJournal(env);
     await publishRoleStatus(env);
     return json({ ok: true });
   }
@@ -187,7 +186,7 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
   // The remaining steps belong to the cycle started by the latest briefing.
   const cur = await env.DB.prepare("SELECT value FROM settings WHERE key = 'bot_cycle'").first<{ value: string }>();
   const active = cur ? (JSON.parse(cur.value) as { cycle: number; ts: number }) : null;
-  if (!active || Number(body.cycle) !== active.cycle || Date.now() - active.ts > CYCLE_TTL_MS)
+  if (!active || Number(body.cycle) !== active.cycle || Date.now() - active.ts > RUN_WINDOW_MS)
     return json({ error: "stale or unknown cycle: GET /api/bot/briefing first and pass its cycle number", current: active?.cycle ?? null }, 409);
   const L = new Ledger(env, active.cycle);
 
@@ -215,6 +214,7 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
   }
 
   if (p === "/api/bot/decisions") {
+    await markDecisions(env, active.cycle);
     const ctx = await loadCtx(env, L);
     const kade = (Array.isArray(body.kade) ? body.kade : []) as Verdict[];
     const nova = (Array.isArray(body.nova) ? body.nova : []) as Decision[];
@@ -298,5 +298,6 @@ async function files(req: Request, env: Env, rawPath: string, body: Record<strin
     env.DB.prepare("INSERT INTO bot_files (path, body, content_type, version, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET body = excluded.body, content_type = excluded.content_type, version = excluded.version, updated_by = excluded.updated_by, updated_at = excluded.updated_at").bind(path, body.body, type, version, agent, now),
     env.DB.prepare("INSERT INTO bot_files_history (path, version, body, updated_by, updated_at) VALUES (?, ?, ?, ?, ?)").bind(path, version, body.body, agent, now),
   ]);
+  if (roleFromThinkingPath(path) === "zara") await noteJournalIfIdle(env, now);
   return json({ ok: true, path, version });
 }
