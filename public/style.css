@@ -60,7 +60,9 @@ td { padding: 6px; border-bottom: 1px solid var(--line); font-variant-numeric: t
 .hint { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
 .chip { display: inline-block; font: 600 11px ui-monospace, monospace; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
 .chip.filled, .chip.approved, .chip.risk_passed { color: var(--up); border-color: var(--up); }
-.chip.risk_failed, .chip.vetoed, .chip.rejected { color: var(--down); border-color: var(--down); }
+.chip.opportunity { color: var(--up); border-color: var(--up); }
+.chip.watch, .chip.new { color: var(--warn); border-color: var(--warn); }
+.chip.risk_failed, .chip.vetoed, .chip.rejected, .chip.avoid { color: var(--down); border-color: var(--down); }
 .chip.skipped { color: var(--warn); border-color: var(--warn); }
 .kb { display: grid; grid-template-columns: 220px 1fr; gap: 14px; min-height: 320px; }
 .kb-list { display: flex; flex-direction: column; gap: 2px; }

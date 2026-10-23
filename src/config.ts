@@ -32,6 +32,8 @@ export interface Env {
   ASSETS: Fetcher;
   XAI_API_KEY?: string;
   ADMIN_TOKEN?: string;
+  BOT_TOKEN?: string;
+  BRAIN?: string;
   MODE: string;
   PAPER_START_PUSD: string;
   GROK_MODEL: string;

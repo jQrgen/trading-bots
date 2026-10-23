@@ -137,6 +137,38 @@ async function loadProposals() {
     : `<p class="empty">No proposals yet.</p>`;
 }
 
+async function loadResearch() {
+  const [tokens, notes] = await Promise.all([get("/api/tokens"), get("/api/research")]);
+  const latest = new Map();
+  for (const n of notes) if (!latest.has(n.token_id)) latest.set(n.token_id, n);
+  const fresh = tokens.filter((t) => t.research_status !== "researched" || latest.has(t.token_id)).slice(0, 25);
+  $("research").innerHTML = fresh.length
+    ? `<table><tr><th>Token</th><th>Seen</th><th>Verdict</th></tr>${fresh
+        .map((t) => {
+          const n = latest.get(t.token_id);
+          const tip = n ? [n.note, n.opportunity && "Opportunity: " + n.opportunity].filter(Boolean).join("\n") : "Not researched yet";
+          const status = n ? n.verdict : t.research_status;
+          return `<tr title="${esc(tip)}"><td>${esc(t.symbol)} <small class="hint">${esc(t.name ?? "")} · ${fmt(t.last_tvl_bch, 1)} BCH</small></td><td>${ago(t.first_seen)}</td><td><span class="chip ${esc(status)}">${esc(status)}</span></td></tr>`;
+        })
+        .join("")}</table>`
+    : `<p class="empty">No new tokens since the desk started watching. New Cauldron pools show up here and the team researches each one.</p>`;
+}
+
+async function loadSentiment() {
+  const [rows, pad] = await Promise.all([get("/api/sentiment"), get("/api/launchpad")]);
+  const recent = rows.filter((r) => r.ts > Date.now() - 24 * 3600 * 1000).slice(0, 20);
+  $("sentiment").innerHTML = recent.length
+    ? `<table><tr><th>Subject</th><th class="num">Score</th><th>Summary</th></tr>${recent
+        .map((r) => `<tr><td>${esc(r.subject === "token" ? r.symbol : r.subject)} <small class="hint">${ago(r.ts)}</small></td><td class="num ${cls(r.score)}">${signed(r.score, 2)}</td><td>${esc(r.summary)}</td></tr>`)
+        .join("")}</table>`
+    : `<p class="empty">No sentiment readings yet. Vela searches X for held tokens, new tokens and Cauldron news every cycle.</p>`;
+  $("launchpad").innerHTML = pad.length
+    ? `<table><tr><th>Sale</th><th>Status</th><th>Seen</th></tr>${pad
+        .map((x) => `<tr><td><code>${esc(String(x.offered_token_id).slice(0, 10))}…</code></td><td><span class="chip">${esc(x.status)}</span></td><td>${ago(x.first_seen)}</td></tr>`)
+        .join("")}</table>`
+    : `<p class="empty">Not launched yet. The desk checks every 15 minutes and alerts the team the moment the first sale appears.</p>`;
+}
+
 async function loadScorecard() {
   const c = await get("/api/scorecard");
   if (!c || !c.overall.trades) {
@@ -259,7 +291,7 @@ $("range").addEventListener("click", (e) => {
 async function refresh() {
   try {
     await loadEvents();
-    await Promise.all([loadState(), loadChart(), loadTrades(), loadJournal(), loadProposals(), loadScorecard(), loadKnowledge(), loadCalls()]);
+    await Promise.all([loadState(), loadChart(), loadTrades(), loadJournal(), loadProposals(), loadResearch(), loadSentiment(), loadScorecard(), loadKnowledge(), loadCalls()]);
   } catch (err) {
     console.error(err);
   }

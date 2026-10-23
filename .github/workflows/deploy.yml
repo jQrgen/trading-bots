@@ -56,8 +56,9 @@ jobs:
         env:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          jq -n '{XAI_API_KEY: env.XAI_API_KEY, ADMIN_TOKEN: env.ADMIN_TOKEN} | with_entries(select(.value != ""))' > secrets.json
+          jq -n '{XAI_API_KEY: env.XAI_API_KEY, ADMIN_TOKEN: env.ADMIN_TOKEN, BOT_TOKEN: env.BOT_TOKEN} | with_entries(select(.value != ""))' > secrets.json
           npx wrangler secret bulk secrets.json
           rm secrets.json
       - name: Tell the desk what changed and run a cycle

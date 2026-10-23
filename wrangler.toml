@@ -24,7 +24,10 @@ MODE = "paper"
 PAPER_START_PUSD = "1000"
 GROK_MODEL = "grok-4.7"
 JOURNAL_HOUR_UTC = "21"
+# Who does the thinking: "grok-bot" (Grok Bot app calls /api/bot/*, no xAI key), "xai-api" (Worker calls the xAI API), "rules" (testing)
+BRAIN = "grok-bot"
 
 # Secrets (set with `wrangler secret put`):
-#   XAI_API_KEY  - xAI API key for Grok
-#   ADMIN_TOKEN  - owner token for the kill switch and manual runs
+#   BOT_TOKEN    - token Grok Bot sends as Authorization: Bearer <BOT_TOKEN> to /api/bot/*
+#   ADMIN_TOKEN  - owner token for the kill switch, strategy edits and manual runs
+#   XAI_API_KEY  - optional, only used when BRAIN = "xai-api"

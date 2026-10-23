@@ -1,19 +1,53 @@
 import { PUSD, type Env, type Horizon, type RiskLimits } from "./config";
-import { activePools, configureEndpoints, candles, symbolOf, topTokens, tokensByIds, type TokenInfo } from "./cauldron";
+import { activePools, configureEndpoints, candles, launchpadList, symbolOf, topTokens, tokensByIds, type TokenInfo } from "./cauldron";
 import { askAgent, hasGrok } from "./grok";
-import { loadRiskLimits, seedKnowledge } from "./knowledge";
+import { loadKnowledge, loadRiskLimits, seedKnowledge } from "./knowledge";
 import { Ledger, type Position } from "./ledger";
 import { Prices, simulateSwap } from "./market";
-import { scorecard, sizeScale } from "./scorecard";
+import { scorecard, sizeScale, type Scorecard } from "./scorecard";
 import { checkBuy, exitSignal, type Book, type Proposal, type TokenFacts } from "./risk";
 
-interface Signal { token_id: string; symbol: string; signal: string; why: string }
+/*
+ * A trading cycle has two halves:
+ *  - Mechanical (code only): market data, stops and targets, snapshots. The Worker cron always does this.
+ *  - Judgement (the six agents): signals, proposals, vetoes, approvals, journal. This is the "brain".
+ *
+ * The brain is chosen with the BRAIN variable:
+ *  - "grok-bot" (default): Grok Bot runs the agents and talks to the desk through /api/bot/* (src/bot.ts).
+ *  - "xai-api": the Worker calls Grok through the xAI API on each cron tick (needs XAI_API_KEY).
+ *  - "rules": simple rule-based agents, for testing without any Grok.
+ * Whatever the brain, the risk engine and execution below are the same deterministic code.
+ */
+
+export interface Signal { token_id: string; symbol: string; signal: string; why: string }
+export interface Verdict { proposal_id: string; veto: boolean; comment?: string }
+export interface Decision { proposal_id: string; approve: boolean; reason?: string }
 
 const HORIZONS: Horizon[] = ["short", "medium", "long"];
-const round = (n: number, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
+export const round = (n: number, d = 2) => Math.round(n * 10 ** d) / 10 ** d;
+export const brainOf = (env: Env) => (env.BRAIN === "xai-api" && hasGrok(env) ? "xai-api" : env.BRAIN === "rules" ? "rules" : "grok-bot");
 
+/** Cron entry point: mechanical half always, judgement half when the Worker is the brain. */
 export async function runCycle(env: Env): Promise<void> {
-  // One cycle at a time: a slow cycle must not overlap the next cron tick.
+  await withLock(env, async () => {
+    const L = await newCycle(env);
+    try {
+      const ctx = await mechanical(env, L);
+      const brain = brainOf(env);
+      if (brain === "xai-api") await xaiBrain(env, L, ctx);
+      else if (brain === "rules") await rulesBrain(env, L, ctx);
+    } catch (err) {
+      await L.log("desk", "error", `Cycle ${L.cycle} failed: ${(err as Error).message}`);
+    } finally {
+      for (const a of ["orin", "vela", "kade", "nova", "rune", "zara"] as const) await L.status(a, idleText(env));
+    }
+  });
+}
+
+const idleText = (env: Env) => (brainOf(env) === "grok-bot" ? "idle, waiting for Grok Bot" : "idle, next cycle in 15 min");
+
+async function withLock(env: Env, fn: () => Promise<void>) {
+  // One cycle at a time: a slow cycle must not overlap the next tick.
   const now = Date.now();
   const lock = await env.DB.prepare("UPDATE settings SET value = ? WHERE key = 'lock' AND CAST(value AS INTEGER) < ?").bind(String(now), now - 10 * 60 * 1000).run();
   if (!lock.meta.changes) {
@@ -21,59 +55,107 @@ export async function runCycle(env: Env): Promise<void> {
     if (!inserted.meta.changes) return;
   }
   try {
-    await runCycleLocked(env);
+    await fn();
   } finally {
     await env.DB.prepare("UPDATE settings SET value = '0' WHERE key = 'lock'").run();
   }
 }
 
-async function runCycleLocked(env: Env): Promise<void> {
-  const cycle = Number((await env.DB.prepare("SELECT COALESCE(MAX(cycle), 0) + 1 AS c FROM events").first<{ c: number }>())?.c ?? 1);
-  const L = new Ledger(env, cycle);
+export async function newCycle(env: Env): Promise<Ledger> {
   configureEndpoints(env);
-  try {
-    await cycleBody(env, L);
-  } catch (err) {
-    await L.log("desk", "error", `Cycle ${cycle} failed: ${(err as Error).message}`);
-  } finally {
-    for (const a of ["nova", "orin", "vela", "kade", "rune", "zara"] as const) await L.status(a, "idle, next cycle in 15 min");
-  }
+  const cycle = Number((await env.DB.prepare("SELECT COALESCE(MAX(cycle), 0) + 1 AS c FROM events").first<{ c: number }>())?.c ?? 1);
+  return new Ledger(env, cycle);
 }
 
-async function cycleBody(env: Env, L: Ledger) {
+export interface Ctx {
+  RISK: RiskLimits;
+  halted: boolean;
+  tokens: Map<string, TokenInfo>;
+  list: TokenInfo[];
+  prices: Prices;
+  held: Position[];
+  book: { total: number; byHorizon: Record<Horizon, number> };
+  dayChangePct: number;
+  card: Scorecard;
+  tvlDayAgo: Map<string, number>;
+}
+
+/** Load prices and the book. Used by every stage so decisions always see fresh data. */
+export async function loadCtx(env: Env, L: Ledger): Promise<Ctx> {
   await ensureWallet(env, L);
   const seeded = await seedKnowledge(env);
   if (seeded.length) await L.log("desk", "knowledge", `Knowledge base seeded with defaults: ${seeded.join(", ")}.`, { seeded });
   const RISK = await loadRiskLimits(env);
   const halted = (await L.setting("halted")) === "1";
-
-  // Market data
-  await L.status("orin", "scanning Cauldron");
   const list = await topTokens(150);
-  let held = await L.openPositions();
+  const held = await L.openPositions();
   const missing = held.map((p) => p.token_id).filter((id) => id !== "bch" && !list.some((t) => t.token_id === id));
   const tokens = new Map<string, TokenInfo>([...list, ...(await tokensByIds([PUSD, ...missing]))].map((t) => [t.token_id, t]));
   const prices = new Prices(tokens);
-
-  // Rune: stops and targets first, always (even when halted, exits reduce risk).
-  await L.status("rune", "checking stops and targets");
-  for (const p of held) {
-    const now = prices.tokenPusd(p.token_id);
-    const reason = now === null ? null : exitSignal(p.entry_price_pusd, now, p.target_pct, p.stop_pct);
-    if (reason) await closePosition(L, prices, p, reason === "stop" ? "stop hit" : "target hit");
-  }
-  held = await L.openPositions();
-
   const book = await bookOf(L, prices);
-  await L.snapshot(book.total, prices.bchPusd);
   const dayAgo = await L.valueAt(24 * 3600 * 1000);
   const dayChangePct = dayAgo ? ((book.total - dayAgo) / dayAgo) * 100 : 0;
-  if (dayChangePct <= -RISK.dailyLossHaltPct) await L.log("kade", "risk", `Portfolio down ${dayChangePct.toFixed(1)}% in 24h. New buys paused.`);
-
-  // Orin: scan. Liquidity trend matters more than price on Cauldron: growing pools mean real interest.
-  const tvlDayAgo = await L.tvlAt(24 * 3600 * 1000);
   const card = scorecard(await L.closedSince(30 * 86400 * 1000), 30);
-  await env.DB.prepare("INSERT OR REPLACE INTO scorecards (ts, window_days, data) VALUES (?, ?, ?)").bind(Math.floor(Date.now() / 3600000) * 3600000, 30, JSON.stringify(card)).run();
+  const tvlDayAgo = await L.tvlAt(24 * 3600 * 1000);
+  return { RISK, halted, tokens, list, prices, held, book, dayChangePct, card, tvlDayAgo };
+}
+
+/** The code-only half: record the market, run stops and targets, snapshot the portfolio. */
+export async function mechanical(env: Env, L: Ledger): Promise<Ctx> {
+  await L.status("rune", "checking stops and targets");
+  let ctx = await loadCtx(env, L);
+  const { prices } = ctx;
+  let closed = 0;
+  for (const p of ctx.held) {
+    const now = prices.tokenPusd(p.token_id);
+    const reason = now === null ? null : exitSignal(p.entry_price_pusd, now, p.target_pct, p.stop_pct);
+    if (reason) {
+      await closePosition(L, prices, p, reason === "stop" ? "stop hit" : "target hit");
+      closed++;
+    }
+  }
+  if (closed) ctx = { ...ctx, held: await L.openPositions(), book: await bookOf(L, prices) };
+  await L.recordTicks(ctx.list.slice(0, 60).map((t) => ({ token_id: t.token_id, symbol: symbolOf(t), price_pusd: prices.tokenPusd(t.token_id), tvl_bch: t.tvl_sats / 1e8, chg_24h_pct: (t.change_24h_bp ?? 0) / 100, volume_sats: t.trade_volume ?? null })));
+  await env.DB.prepare("INSERT OR REPLACE INTO scorecards (ts, window_days, data) VALUES (?, ?, ?)").bind(Math.floor(Date.now() / 3600000) * 3600000, 30, JSON.stringify(ctx.card)).run();
+  await discover(env, L, ctx).catch((e) => L.log("orin", "error", `Discovery failed: ${(e as Error).message}`));
+  if (ctx.dayChangePct <= -ctx.RISK.dailyLossHaltPct) await L.log("kade", "risk", `Portfolio down ${ctx.dayChangePct.toFixed(1)}% in 24h. New buys paused.`);
+  await saveMarks(L, prices);
+  return ctx;
+}
+
+/** Notice new Cauldron listings and launchpad sales, and keep them in D1 for research. */
+async function discover(env: Env, L: Ledger, ctx: Ctx) {
+  const seen = new Set((await env.DB.prepare("SELECT token_id FROM tokens_seen").all<{ token_id: string }>()).results.map((r) => r.token_id));
+  const firstRun = seen.size === 0;
+  const stmt = env.DB.prepare(
+    "INSERT INTO tokens_seen (token_id, symbol, name, source, first_seen, first_pool_ts, last_tvl_bch, research_status) VALUES (?, ?, ?, 'cauldron', ?, ?, ?, ?) ON CONFLICT(token_id) DO UPDATE SET last_tvl_bch = excluded.last_tvl_bch",
+  );
+  const fresh = ctx.list.filter((t) => !seen.has(t.token_id));
+  await env.DB.batch(ctx.list.map((t) => stmt.bind(t.token_id, symbolOf(t), t.display_name ?? null, Date.now(), t.first_pool_ts ?? null, t.tvl_sats / 1e8, firstRun && !isRecent(t) ? "researched" : "new")));
+  if (!firstRun) for (const t of fresh) await L.log("orin", "new-token", `New token on Cauldron: ${symbolOf(t)} with ${round(t.tvl_sats / 1e8, 1)} BCH liquidity. Queued for research.`, { token_id: t.token_id });
+
+  const idos = await launchpadList().catch(() => null);
+  if (!idos) return;
+  const known = new Map((await env.DB.prepare("SELECT id, status FROM launchpad").all<{ id: string; status: string }>()).results.map((r) => [r.id, r.status]));
+  if (idos.length && !known.size) await L.log("orin", "alert", `The Cauldron launchpad is live: ${idos.length} sale(s) listed. The team will research them.`);
+  for (const ido of idos) {
+    const id = String(ido.id ?? ido.public_id ?? ido.preinit_txid ?? "");
+    if (!id) continue;
+    const status = String(ido.status ?? "");
+    const offered = ido.offered_token_id ?? ido.offering_token_id ?? null;
+    if (!known.has(id)) await L.log("orin", "launchpad", `New launchpad sale ${id.slice(0, 8)}… (${status || "unknown status"}). Queued for research.`, ido);
+    else if (known.get(id) !== status) await L.log("orin", "launchpad", `Launchpad sale ${id.slice(0, 8)}… is now ${status}.`, ido);
+    await env.DB.prepare("INSERT INTO launchpad (id, offered_token_id, status, data, first_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET status = excluded.status, data = excluded.data, updated_at = excluded.updated_at")
+      .bind(id, offered === null ? null : String(offered), status, JSON.stringify(ido), Date.now(), Date.now())
+      .run();
+  }
+}
+
+const isRecent = (t: TokenInfo) => Boolean(t.first_pool_ts && Date.now() / 1000 - t.first_pool_ts < 7 * 86400);
+
+/** What the agents look at: market digest, portfolio, scorecard, lessons, owner notes. */
+export async function briefing(env: Env, ctx: Ctx) {
+  const { prices, list, tvlDayAgo } = ctx;
   const digest = list
     .filter((t) => t.tvl_sats >= 2e8 && t.token_id !== PUSD)
     .map((t) => ({
@@ -87,137 +169,235 @@ async function cycleBody(env: Env, L: Ledger) {
       age_days: t.first_pool_ts ? round((Date.now() / 1000 - t.first_pool_ts) / 86400, 1) : null,
       rank: t.score_rank,
     }));
-  await L.recordTicks(list.slice(0, 60).map((t) => ({ token_id: t.token_id, symbol: symbolOf(t), price_pusd: prices.tokenPusd(t.token_id), tvl_bch: t.tvl_sats / 1e8, chg_24h_pct: (t.change_24h_bp ?? 0) / 100, volume_sats: t.trade_volume ?? null })));
-  let signals: Signal[];
-  if (hasGrok(env)) {
-    const r = await askAgent<{ signals: Signal[]; note: string }>(env, "orin", "Scan this market digest.", { bch_usd: round(prices.bchPusd), signal_scorecard: card.by_signal, tokens: digest }, { cycle: L.cycle });
-    signals = (r.signals ?? []).filter((s) => tokens.has(s.token_id)).slice(0, 5);
-    await L.log("orin", "scan", r.note || `Scanned ${digest.length} tokens.`, { signals });
-  } else {
-    signals = digest
-      .filter((t) => t.chg_24h_pct > 5 && t.chg_24h_pct < 50 && t.tvl_bch >= 5 && (t.tvl_chg_24h_pct ?? 0) >= 0)
-      .sort((a, b) => b.chg_24h_pct - a.chg_24h_pct)
-      .slice(0, 3)
-      .map((t) => ({ token_id: t.token_id, symbol: t.symbol, signal: "momentum", why: `Up ${t.chg_24h_pct}% in 24h with ${t.tvl_bch} BCH liquidity${t.tvl_chg_24h_pct ? ` (${t.tvl_chg_24h_pct}% liquidity change)` : ""}.` }));
-    await L.log("orin", "scan", `Scanned ${digest.length} tokens with liquidity, ${signals.length} momentum signals (rule-based, no Grok key).`, { signals });
-  }
-  for (const s of signals) await L.log("orin", "signal", `${s.symbol}: ${s.signal}. ${s.why}`, s);
-
-  // Vela: research the signals and held positions
-  await L.status("vela", `researching ${signals.length} signals`);
-  const facts = new Map<string, TokenFacts>();
-  const research = [];
-  for (const s of signals) {
-    const f = await tokenFacts(s.token_id, tokens.get(s.token_id)!);
-    facts.set(s.token_id, f);
-    await L.log("kade", "rug-check", rugLine(s.symbol, f, RISK), f);
-    const c = await candles(s.token_id, 7, 4 * 3600).catch(() => []);
-    research.push({ ...s, facts: f, closes_4h_pusd: c.map((x) => round((x.close / 1e8) * 10 ** prices.decimals(s.token_id) * prices.bchPusd, 6)) });
-  }
-  const portfolio = { total_pusd: round(book.total), by_horizon_pusd: book.byHorizon, positions: held.filter((p) => p.status === "open").map((p) => ({ token_id: p.token_id, symbol: p.symbol, horizon: p.horizon, cost_pusd: round(p.cost_pusd), value_pusd: round(prices.value(p.token_id, p.amount)), thesis: p.thesis })) };
-
-  const lastDeploy = await L.setting("last_deploy");
-  const repoUpdate = lastDeploy && JSON.parse(lastDeploy).ts > Date.now() - 24 * 3600 * 1000 ? JSON.parse(lastDeploy) : null;
   const lessons = (await env.DB.prepare("SELECT lesson FROM lessons WHERE status = 'active' ORDER BY ts DESC LIMIT 10").all<{ lesson: string }>()).results.map((r) => r.lesson);
-  let proposals: Proposal[] = [];
-  if (hasGrok(env) && (research.length || portfolio.positions.length)) {
-    const r = await askAgent<{ proposals: Omit<Proposal, "id">[]; note: string }>(env, "vela", "Write trade proposals.", { research, portfolio, scorecard: card, lessons, bch_usd: round(prices.bchPusd) }, { search: true, cycle: L.cycle });
-    proposals = (r.proposals ?? []).map((p, i) => ({ ...p, id: `c${L.cycle}-p${i + 1}` }));
-    if (r.note) await L.log("vela", "note", r.note);
-  } else if (!hasGrok(env)) {
-    proposals = signals.slice(0, 2).map((s) => ({ id: `c${L.cycle}-p${s.symbol}`, action: "buy", token_id: s.token_id, symbol: s.symbol, horizon: "short", size_pct: 2, target_pct: 25, stop_pct: 12, thesis: `Rule-based momentum entry: ${s.why}` }));
-  }
-  for (const p of proposals) p.signal ??= signals.find((s) => s.token_id === p.token_id)?.signal ?? (held.some((h) => h.token_id === p.token_id) ? "exit-review" : "vela");
+  const lastDeploy = await env.DB.prepare("SELECT value FROM settings WHERE key = 'last_deploy'").first<{ value: string }>();
+  const deploy = lastDeploy ? JSON.parse(lastDeploy.value) : null;
+  const newTokens = (await env.DB.prepare("SELECT token_id, symbol, name, source, first_seen, first_pool_ts, last_tvl_bch FROM tokens_seen WHERE research_status = 'new' ORDER BY first_seen DESC LIMIT 15").all()).results;
+  const launchpad = (await env.DB.prepare("SELECT id, offered_token_id, status, data, first_seen FROM launchpad WHERE status != 'DISTRIBUTED' ORDER BY first_seen DESC LIMIT 20").all<{ data: string }>()).results.map((r) => ({ ...r, data: JSON.parse(r.data) }));
+  const recentSentiment = (await env.DB.prepare("SELECT ts, subject, token_id, symbol, score, mentions, summary FROM sentiment WHERE ts >= ? ORDER BY ts DESC LIMIT 30").bind(Date.now() - 24 * 3600 * 1000).all()).results;
+  return {
+    bch_usd: round(prices.bchPusd),
+    halted: ctx.halted,
+    sentiment_last_24h: recentSentiment,
+    new_tokens_to_research: newTokens,
+    launchpad: { live: launchpad.length > 0, sales: launchpad },
+    portfolio: {
+      total_pusd: round(ctx.book.total),
+      day_change_pct: round(ctx.dayChangePct, 1),
+      by_horizon_pusd: Object.fromEntries(Object.entries(ctx.book.byHorizon).map(([k, v]) => [k, round(v)])),
+      positions: ctx.held.map((p) => ({ token_id: p.token_id, symbol: p.symbol, horizon: p.horizon, cost_pusd: round(p.cost_pusd), value_pusd: round(prices.value(p.token_id, p.amount)), target_pct: p.target_pct, stop_pct: p.stop_pct, thesis: p.thesis })),
+    },
+    scorecard: ctx.card,
+    lessons,
+    risk_limits: ctx.RISK,
+    recent_code_update: deploy && deploy.ts > Date.now() - 24 * 3600 * 1000 ? deploy : null,
+    tokens: digest,
+  };
+}
+
+/** Facts, rug check and recent candles for one token, for Vela's research. */
+export async function research(env: Env, L: Ledger, ctx: Ctx, s: Signal) {
+  const t = ctx.tokens.get(s.token_id);
+  if (!t) return null;
+  const f = await tokenFacts(s.token_id, t);
+  await L.log("kade", "rug-check", rugLine(s.symbol, f, ctx.RISK), f);
+  const c = await candles(s.token_id, 7, 4 * 3600).catch(() => []);
+  return { ...s, facts: f, closes_4h_pusd: c.map((x) => round((x.close / 1e8) * 10 ** ctx.prices.decimals(s.token_id) * ctx.prices.bchPusd, 6)) };
+}
+
+/** Log Orin's signals. */
+export async function recordSignals(L: Ledger, signals: Signal[], note: string | undefined, scanned: number) {
+  await L.log("orin", "scan", note || `Scanned ${scanned} tokens.`, { signals });
+  for (const s of signals) await L.log("orin", "signal", `${s.symbol}: ${s.signal}. ${s.why}`, s);
+}
+
+/** Store Vela's proposals and run Kade's risk engine on them. Returns the engine verdicts. */
+export async function proposeAndCheck(L: Ledger, ctx: Ctx, raw: Omit<Proposal, "id">[], signals: Signal[], note?: string) {
+  if (note) await L.log("vela", "note", note);
+  const proposals: Proposal[] = raw.map((p, i) => ({ ...p, id: `c${L.cycle}-p${i + 1}` }));
+  for (const p of proposals) p.signal ??= signals.find((s) => s.token_id === p.token_id)?.signal ?? (ctx.held.some((h) => h.token_id === p.token_id) ? "exit-review" : "vela");
   for (const p of proposals) {
     const cases = p.bull_case ? ` Bull: ${p.bull_case} Bear: ${p.bear_case}` : "";
-    await L.log("vela", "proposal", `${p.action.toUpperCase()} ${p.symbol} (${p.horizon}, ${p.size_pct}%): ${p.thesis}${cases}`, p);
+    await L.log("vela", "proposal", `${String(p.action).toUpperCase()} ${p.symbol} (${p.horizon}, ${p.size_pct}%): ${p.thesis}${cases}`, p);
     await L.saveProposal(p, "vela");
   }
-  if (!proposals.length) {
-    await L.log("nova", "decision", "No proposals this cycle. Holding.");
-    await saveMarks(L, prices);
-    return;
-  }
+  if (!proposals.length) await L.log("nova", "decision", "No proposals this cycle. Holding.");
 
-  // Kade: deterministic risk engine, then Grok may veto
   await L.status("kade", `risk-checking ${proposals.length} proposals`);
-  const verdicts = new Map<string, { pass: boolean; allowed: number; reasons: string[] }>();
+  const verdicts = [];
   for (const p of proposals) {
+    let v: { pass: boolean; allowed: number; reasons: string[] };
     if (p.action === "sell") {
-      const has = held.some((h) => h.token_id === p.token_id);
-      verdicts.set(p.id, { pass: has, allowed: 0, reasons: has ? [] : ["no position to sell"] });
-      continue;
+      const has = ctx.held.some((h) => h.token_id === p.token_id);
+      v = { pass: has, allowed: 0, reasons: has ? [] : ["no position to sell"] };
+    } else if (p.action !== "buy") {
+      v = { pass: false, allowed: 0, reasons: ["action must be buy or sell"] };
+    } else if (p.token_id === PUSD) {
+      v = { pass: false, allowed: 0, reasons: ["PUSD is the home asset"] };
+    } else {
+      const facts = p.token_id === "bch" ? BCH_FACTS : ctx.tokens.has(p.token_id) ? await tokenFacts(p.token_id, ctx.tokens.get(p.token_id)!) : undefined;
+      const heldPusd = ctx.held.filter((h) => h.token_id === p.token_id).reduce((s, h) => s + ctx.prices.value(h.token_id, h.amount), 0);
+      const b: Book = { totalPusd: ctx.book.total, byHorizonPusd: ctx.book.byHorizon, heldPusd, openShort: ctx.held.filter((h) => h.horizon === "short").length, dayChangePct: ctx.dayChangePct, bchPusd: ctx.prices.bchPusd };
+      const scale = HORIZONS.includes(p.horizon) ? sizeScale(ctx.card, p.horizon) : 1;
+      if (scale < 1) await L.log("kade", "risk", `${p.horizon} trades are losing lately; ${p.symbol} size scaled to ${scale * 100}%.`);
+      const r = checkBuy({ ...p, size_pct: Number(p.size_pct) * scale }, facts, b, ctx.halted, ctx.RISK);
+      v = { pass: r.pass, allowed: r.allowedPusd, reasons: r.reasons };
     }
-    if (p.token_id === PUSD) { verdicts.set(p.id, { pass: false, allowed: 0, reasons: ["PUSD is the home asset"] }); continue; }
-    if (!facts.has(p.token_id) && tokens.has(p.token_id)) facts.set(p.token_id, await tokenFacts(p.token_id, tokens.get(p.token_id)!));
-    const heldPusd = held.filter((h) => h.token_id === p.token_id).reduce((s, h) => s + prices.value(h.token_id, h.amount), 0);
-    const b: Book = { totalPusd: book.total, byHorizonPusd: book.byHorizon, heldPusd, openShort: held.filter((h) => h.horizon === "short").length, dayChangePct, bchPusd: prices.bchPusd };
-    const scale = sizeScale(card, p.horizon);
-    if (scale < 1) await L.log("kade", "risk", `${p.horizon} trades are losing lately; ${p.symbol} size scaled to ${scale * 100}%.`);
-    const v = checkBuy({ ...p, size_pct: p.size_pct * scale }, p.token_id === "bch" ? BCH_FACTS : facts.get(p.token_id), b, halted, RISK);
-    verdicts.set(p.id, { pass: v.pass, allowed: v.allowedPusd, reasons: v.reasons });
-  }
-  if (hasGrok(env)) {
-    const passed = proposals.filter((p) => verdicts.get(p.id)!.pass);
-    if (passed.length) {
-      const r = await askAgent<{ verdicts: { proposal_id: string; veto: boolean; comment: string }[] }>(env, "kade", "Review these proposals the risk engine passed.", { proposals: passed.map((p) => ({ ...p, engine: verdicts.get(p.id), facts: facts.get(p.token_id) })) }, { cycle: L.cycle });
-      for (const v of r.verdicts ?? []) {
-        const cur = verdicts.get(v.proposal_id);
-        if (!cur) continue;
-        if (v.veto) { cur.pass = false; cur.reasons.push(`Kade veto: ${v.comment}`); }
-        else if (v.comment) cur.reasons.push(v.comment);
-      }
-    }
-  }
-  for (const p of proposals) {
-    const v = verdicts.get(p.id)!;
     const size = p.action === "buy" && v.pass ? ` Allowed ${round(v.allowed)} PUSD.` : "";
-    await L.log("kade", v.pass ? "risk-pass" : "risk-fail", `${p.symbol}: ${v.pass ? "PASS" : "FAIL"}.${size} ${v.reasons.join("; ")}`.trim(), { proposal: p.id, ...v });
-    const vetoed = v.reasons.some((r) => r.startsWith("Kade veto"));
-    await L.updateProposal(p.id, { status: v.pass ? "risk_passed" : vetoed ? "vetoed" : "risk_failed", allowed_pusd: v.allowed, risk_notes: v.reasons.join("; ") });
+    await L.log("kade", v.pass ? "risk-pass" : "risk-fail", `${p.symbol}: engine ${v.pass ? "PASS" : "FAIL"}.${size} ${v.reasons.join("; ")}`.trim(), { proposal: p.id, ...v });
+    await L.updateProposal(p.id, { status: v.pass ? "risk_passed" : "risk_failed", allowed_pusd: v.allowed, risk_notes: v.reasons.join("; ") });
+    verdicts.push({ proposal_id: p.id, symbol: p.symbol, action: p.action, pass: v.pass, allowed_pusd: round(v.allowed), reasons: v.reasons });
   }
+  return { cycle: L.cycle, proposals, verdicts };
+}
 
-  // Nova: approve
-  await L.status("nova", "deciding");
-  const candidates = proposals.filter((p) => verdicts.get(p.id)!.pass);
-  let approved: Proposal[] = [];
-  if (candidates.length && hasGrok(env)) {
-    const r = await askAgent<{ decisions: { proposal_id: string; approve: boolean; reason: string }[]; note: string }>(env, "nova", "Approve or reject these risk-checked proposals.", { portfolio, scorecard: card, lessons, recent_repo_update: repoUpdate, proposals: candidates.map((p) => ({ ...p, allowed_pusd: round(verdicts.get(p.id)!.allowed) })) }, { cycle: L.cycle });
-    for (const d of r.decisions ?? []) {
-      const p = candidates.find((c) => c.id === d.proposal_id);
-      if (!p) continue;
-      await L.log("nova", "decision", `${d.approve ? "Approved" : "Rejected"} ${p.action} ${p.symbol}: ${d.reason}`, d);
-      await L.updateProposal(p.id, { status: d.approve ? "approved" : "rejected", decision_note: d.reason });
-      if (d.approve) approved.push(p);
-    }
-    if (r.note) await L.log("nova", "note", r.note);
-  } else {
-    approved = candidates;
-    for (const p of approved) {
-      await L.log("nova", "decision", `Approved ${p.action} ${p.symbol} (rule-based).`);
-      await L.updateProposal(p.id, { status: "approved", decision_note: "rule-based" });
+/** Apply Kade's vetoes and Nova's approvals to a cycle's risk-passed proposals, then execute (paper). */
+export async function decideAndExecute(env: Env, L: Ledger, ctx: Ctx, kade: Verdict[], nova: Decision[], novaNote?: string) {
+  const rows = (await env.DB.prepare("SELECT * FROM proposals WHERE cycle = ? AND status = 'risk_passed'").bind(L.cycle).all<Proposal & { allowed_pusd: number }>()).results;
+  for (const v of kade) {
+    const p = rows.find((r) => r.id === v.proposal_id);
+    if (!p) continue;
+    if (v.veto) {
+      await L.log("kade", "risk-fail", `${p.symbol}: VETO. ${v.comment ?? ""}`.trim(), v);
+      await L.updateProposal(p.id, { status: "vetoed", risk_notes: `Kade veto: ${v.comment ?? ""}` });
+    } else if (v.comment) {
+      await L.log("kade", "risk-pass", `${p.symbol}: OK. ${v.comment}`, v);
     }
   }
-  if (halted) {
+  const vetoed = new Set(kade.filter((v) => v.veto).map((v) => v.proposal_id));
+  let approved: (Proposal & { allowed_pusd: number })[] = [];
+  for (const d of nova) {
+    const p = rows.find((r) => r.id === d.proposal_id);
+    if (!p || vetoed.has(p.id)) continue;
+    await L.log("nova", "decision", `${d.approve ? "Approved" : "Rejected"} ${p.action} ${p.symbol}: ${d.reason ?? ""}`.trim(), d);
+    await L.updateProposal(p.id, { status: d.approve ? "approved" : "rejected", decision_note: d.reason ?? "" });
+    if (d.approve) approved.push(p);
+  }
+  if (novaNote) await L.log("nova", "note", novaNote);
+  if (ctx.halted) {
     for (const p of approved.filter((x) => x.action !== "sell")) await L.updateProposal(p.id, { status: "rejected", decision_note: "desk halted by owner" });
     approved = approved.filter((p) => p.action === "sell");
     await L.log("nova", "decision", "Desk is halted by the owner: only sells go through.");
   }
 
-  // Rune: execute (paper)
-  for (const p of approved.slice(RISK.maxTradesPerCycle)) await L.updateProposal(p.id, { status: "skipped", decision_note: "over the per-cycle trade limit" });
-  for (const p of approved.slice(0, RISK.maxTradesPerCycle)) {
+  const fills = [];
+  for (const p of approved.slice(ctx.RISK.maxTradesPerCycle)) await L.updateProposal(p.id, { status: "skipped", decision_note: "over the per-cycle trade limit" });
+  for (const p of approved.slice(0, ctx.RISK.maxTradesPerCycle)) {
     await L.status("rune", `executing ${p.action} ${p.symbol}`);
     if (p.action === "sell") {
-      for (const h of held.filter((x) => x.token_id === p.token_id)) await closePosition(L, prices, h, `Vela exit: ${p.thesis}`);
+      for (const h of ctx.held.filter((x) => x.token_id === p.token_id)) fills.push(await closePosition(L, ctx.prices, h, `Vela exit: ${p.thesis}`));
       await L.updateProposal(p.id, { status: "filled" });
     } else {
-      const positionId = await openPosition(L, prices, p, verdicts.get(p.id)!.allowed, RISK);
-      await L.updateProposal(p.id, positionId ? { status: "filled", position_id: positionId } : { status: "skipped", decision_note: "price impact too high at execution" });
+      const fill = await openPosition(L, ctx.prices, p, p.allowed_pusd, ctx.RISK);
+      await L.updateProposal(p.id, fill ? { status: "filled", position_id: fill.position_id } : { status: "skipped", decision_note: "price impact too high at execution" });
+      if (fill) fills.push(fill);
     }
   }
-  await saveMarks(L, prices);
+  await saveMarks(L, ctx.prices);
+  return { cycle: L.cycle, approved: approved.map((p) => p.id), fills };
 }
+
+export interface ResearchNote { token_id: string; symbol: string; verdict: string; opportunity?: string; note: string; sources?: string[] }
+
+/** Store what the agents learned about tokens, and mark them researched. */
+export async function recordResearch(env: Env, L: Ledger, notes: ResearchNote[], agent = "vela") {
+  for (const n of notes) {
+    const verdict = ["opportunity", "watch", "avoid"].includes(n.verdict) ? n.verdict : "watch";
+    await env.DB.prepare("INSERT INTO research_notes (ts, cycle, agent, token_id, symbol, verdict, opportunity, note, sources) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(Date.now(), L.cycle, agent, n.token_id, n.symbol, verdict, n.opportunity ?? null, n.note, n.sources ? JSON.stringify(n.sources) : null)
+      .run();
+    await env.DB.prepare("UPDATE tokens_seen SET research_status = ?, last_research_at = ? WHERE token_id = ?").bind(verdict === "opportunity" ? "watch" : verdict === "avoid" ? "avoid" : "researched", Date.now(), n.token_id).run();
+    await L.log(agent as "vela", "research", `${n.symbol}: ${verdict.toUpperCase()}. ${n.note}${n.opportunity ? ` Opportunity: ${n.opportunity}` : ""}`, n);
+  }
+}
+
+export interface SentimentReading { subject: string; token_id?: string; symbol?: string; score: number; mentions?: number; summary: string; sources?: string[] }
+
+/** Store X sentiment readings (tokens, Cauldron news, BCH). */
+export async function recordSentiment(env: Env, L: Ledger, readings: SentimentReading[]) {
+  for (const r of readings) {
+    const subject = ["token", "cauldron", "bch"].includes(r.subject) ? r.subject : "token";
+    const score = Math.max(-1, Math.min(1, Number(r.score) || 0));
+    await env.DB.prepare("INSERT INTO sentiment (ts, cycle, subject, token_id, symbol, score, mentions, summary, sources) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(Date.now(), L.cycle, subject, r.token_id ?? null, r.symbol ?? null, score, r.mentions ?? null, String(r.summary).slice(0, 1000), r.sources ? JSON.stringify(r.sources.slice(0, 10)) : null)
+      .run();
+    const label = subject === "token" ? r.symbol ?? "token" : subject === "cauldron" ? "Cauldron news" : "BCH";
+    await L.log("vela", "sentiment", `${label} sentiment on X: ${score >= 0 ? "+" : ""}${score.toFixed(2)}${r.mentions ? ` from ~${r.mentions} posts` : ""}. ${r.summary}`, r);
+  }
+}
+
+/** Zara's journal entry and lessons. */
+export async function recordJournal(env: Env, L: Ledger, text: string, lessons: string[], suggestion?: string) {
+  await env.DB.prepare("INSERT INTO journal (ts, text, lessons) VALUES (?, ?, ?)").bind(Date.now(), text, JSON.stringify(lessons)).run();
+  for (const lesson of lessons) await env.DB.prepare("INSERT INTO lessons (ts, lesson) VALUES (?, ?)").bind(Date.now(), lesson).run();
+  await L.log("zara", "journal", text, { lessons });
+  if (suggestion) await L.log("zara", "suggestion", `Suggested strategy change for the owner: ${suggestion}`);
+}
+
+/** Stats Zara reviews for the journal. */
+export async function journalStats(env: Env, L: Ledger) {
+  const since = Date.now() - 24 * 3600 * 1000;
+  const closed = (await env.DB.prepare("SELECT symbol, horizon, signal, cost_pusd, exit_pusd, close_reason FROM positions WHERE status = 'closed' AND closed_at >= ?").bind(since).all()).results;
+  const vetoes = (await env.DB.prepare("SELECT COUNT(*) AS n FROM proposals WHERE status IN ('risk_failed', 'vetoed') AND ts >= ?").bind(since).first<{ n: number }>())?.n ?? 0;
+  return { closed_24h: closed, failed_or_vetoed_24h: vetoes, scorecard_30d: scorecard(await L.closedSince(30 * 86400 * 1000), 30), value_now: await L.valueAt(0), value_24h_ago: await L.valueAt(24 * 3600 * 1000) };
+}
+
+// ---------- Worker-side brains ----------
+
+async function xaiBrain(env: Env, L: Ledger, ctx: Ctx) {
+  const brief = await briefing(env, ctx);
+  await L.status("orin", "scanning Cauldron");
+  const o = await askAgent<{ signals: Signal[]; note: string }>(env, "orin", "Scan this market digest.", { bch_usd: brief.bch_usd, signal_scorecard: ctx.card.by_signal, new_tokens_to_research: brief.new_tokens_to_research, launchpad: brief.launchpad, tokens: brief.tokens }, { cycle: L.cycle });
+  const signals = (o.signals ?? []).filter((s) => ctx.tokens.has(s.token_id)).slice(0, 5);
+  await recordSignals(L, signals, o.note, brief.tokens.length);
+  await L.status("vela", `researching ${signals.length} signals`);
+  const studied = (await Promise.all(signals.map((s) => research(env, L, ctx, s)))).filter(Boolean);
+  if (!studied.length && !ctx.held.length && !brief.new_tokens_to_research.length) return;
+  const v = await askAgent<{ proposals: Omit<Proposal, "id">[]; research_notes?: ResearchNote[]; sentiment?: SentimentReading[]; note: string }>(env, "vela", "Write trade proposals.", { research: studied, new_tokens_to_research: brief.new_tokens_to_research, launchpad: brief.launchpad, portfolio: brief.portfolio, scorecard: ctx.card, lessons: brief.lessons, bch_usd: brief.bch_usd }, { search: true, cycle: L.cycle });
+  await recordResearch(env, L, (v.research_notes ?? []).slice(0, 20));
+  await recordSentiment(env, L, (v.sentiment ?? []).slice(0, 20));
+  const checked = await proposeAndCheck(L, ctx, v.proposals ?? [], signals, v.note);
+  const passed = checked.verdicts.filter((x) => x.pass);
+  if (!passed.length) return;
+  const k = await askAgent<{ verdicts: Verdict[] }>(env, "kade", "Review these proposals the risk engine passed.", { proposals: passed.map((x) => ({ ...checked.proposals.find((p) => p.id === x.proposal_id), engine: x })) }, { cycle: L.cycle });
+  const n = await askAgent<{ decisions: Decision[]; note: string }>(env, "nova", "Approve or reject these risk-checked proposals.", { portfolio: brief.portfolio, scorecard: ctx.card, lessons: brief.lessons, recent_code_update: brief.recent_code_update, proposals: passed.filter((x) => !(k.verdicts ?? []).some((y) => y.veto && y.proposal_id === x.proposal_id)).map((x) => ({ ...checked.proposals.find((p) => p.id === x.proposal_id), allowed_pusd: x.allowed_pusd })) }, { cycle: L.cycle });
+  await decideAndExecute(env, L, ctx, k.verdicts ?? [], n.decisions ?? [], n.note);
+}
+
+async function rulesBrain(env: Env, L: Ledger, ctx: Ctx) {
+  const brief = await briefing(env, ctx);
+  const signals: Signal[] = brief.tokens
+    .filter((t) => t.chg_24h_pct > 5 && t.chg_24h_pct < 50 && t.tvl_bch >= 5 && (t.tvl_chg_24h_pct ?? 0) >= 0)
+    .sort((a, b) => b.chg_24h_pct - a.chg_24h_pct)
+    .slice(0, 3)
+    .map((t) => ({ token_id: t.token_id, symbol: t.symbol, signal: "momentum", why: `Up ${t.chg_24h_pct}% in 24h with ${t.tvl_bch} BCH liquidity.` }));
+  await recordSignals(L, signals, `Scanned ${brief.tokens.length} tokens, ${signals.length} momentum signals (rule-based).`, brief.tokens.length);
+  for (const s of signals) await research(env, L, ctx, s);
+  const checked = await proposeAndCheck(L, ctx, signals.slice(0, 2).map((s) => ({ action: "buy" as const, token_id: s.token_id, symbol: s.symbol, horizon: "short" as const, size_pct: 2, target_pct: 25, stop_pct: 12, thesis: `Rule-based momentum entry: ${s.why}` })), signals);
+  const ok = checked.verdicts.filter((v) => v.pass);
+  await decideAndExecute(env, L, ctx, [], ok.map((v) => ({ proposal_id: v.proposal_id, approve: true, reason: "rule-based" })));
+}
+
+/** Zara's daily journal from the cron (Worker-side brains only; Grok Bot posts its own). */
+export async function runJournal(env: Env): Promise<void> {
+  const brain = brainOf(env);
+  if (brain === "grok-bot") return;
+  const L = await newCycle(env);
+  const last = await env.DB.prepare("SELECT MAX(ts) AS ts FROM journal").first<{ ts: number | null }>();
+  if (last?.ts && last.ts > Date.now() - 20 * 3600 * 1000) return;
+  const stats = await journalStats(env, L);
+  await L.status("zara", "writing the daily journal");
+  if (brain === "xai-api") {
+    const r = await askAgent<{ journal: string; lessons: string[]; strategy_suggestion?: string }>(env, "zara", "Write today's journal.", stats);
+    await recordJournal(env, L, r.journal, r.lessons ?? [], r.strategy_suggestion);
+  } else {
+    const wins = stats.closed_24h.filter((c) => Number(c.exit_pusd) > Number(c.cost_pusd)).length;
+    await recordJournal(env, L, `${stats.closed_24h.length} positions closed in 24h, ${wins} winners. ${stats.failed_or_vetoed_24h} proposals failed risk checks or were vetoed. Portfolio ${round(stats.value_now ?? 0)} PUSD.`, []);
+  }
+  await L.status("zara", idleText(env));
+}
+
+// ---------- Shared helpers ----------
 
 /** Store current marks so the website can value positions without calling the indexer. */
 async function saveMarks(L: Ledger, prices: Prices) {
@@ -258,7 +438,7 @@ function rugLine(symbol: string, f: TokenFacts, RISK: RiskLimits) {
   return `Rug check ${symbol}: ${flags.length ? "flags: " + flags.join(", ") : "no red flags"} (TVL ${f.tvlBch.toFixed(1)} BCH, top LP ${f.topOwnerSharePct}%, age ${(f.poolAgeHours / 24).toFixed(1)}d).`;
 }
 
-async function openPosition(L: Ledger, prices: Prices, p: Proposal, sizePusd: number, RISK: RiskLimits): Promise<number | null> {
+async function openPosition(L: Ledger, prices: Prices, p: Proposal, sizePusd: number, RISK: RiskLimits) {
   const pusdUnits = Math.floor(sizePusd * 100);
   const fill = await simulateSwap(PUSD, p.token_id, pusdUnits, prices);
   if (fill.impactPct > RISK.maxPriceImpactPct || fill.amountOut <= 0) {
@@ -275,7 +455,7 @@ async function openPosition(L: Ledger, prices: Prices, p: Proposal, sizePusd: nu
   });
   await L.recordTrade({ side: "buy", token_id: p.token_id, symbol, amount: fill.amountOut, pusd: sizePusd, price_pusd: sizePusd / whole, impact_pct: fill.impactPct, estimated: fill.estimated, position_id: positionId, reason: p.thesis });
   await L.log("rune", "fill", `PAPER BUY ${round(whole, 4)} ${symbol} for ${round(sizePusd)} PUSD (impact ${fill.impactPct.toFixed(2)}%${fill.estimated ? ", estimated" : ""}). Target +${p.target_pct}%, stop -${p.stop_pct}%.`, fill);
-  return positionId;
+  return { side: "buy", symbol, pusd: round(sizePusd), amount: fill.amountOut, impact_pct: round(fill.impactPct), estimated: fill.estimated, position_id: positionId };
 }
 
 async function closePosition(L: Ledger, prices: Prices, pos: Position, reason: string) {
@@ -288,6 +468,7 @@ async function closePosition(L: Ledger, prices: Prices, pos: Position, reason: s
   const whole = pos.amount / 10 ** prices.decimals(pos.token_id);
   await L.recordTrade({ side: "sell", token_id: pos.token_id, symbol: pos.symbol, amount: pos.amount, pusd: outPusd, price_pusd: whole ? outPusd / whole : 0, impact_pct: fill.impactPct, estimated: fill.estimated, position_id: pos.id, reason });
   await L.log("rune", "fill", `PAPER SELL ${pos.symbol} for ${round(outPusd)} PUSD, ${pnl >= 0 ? "+" : ""}${round(pnl)} PUSD (${round((pnl / pos.cost_pusd) * 100, 1)}%). ${reason}.`, { ...fill, pnl });
+  return { side: "sell", symbol: pos.symbol, pusd: round(outPusd), pnl_pusd: round(pnl), position_id: pos.id };
 }
 
 async function bookOf(L: Ledger, prices: Prices) {
@@ -308,31 +489,4 @@ async function ensureWallet(env: Env, L: Ledger) {
   await L.log("desk", "start", `Paper wallet opened with ${start} PUSD. Mode: ${env.MODE.toUpperCase()}.`);
 }
 
-/** Zara's daily journal. Runs once a day from the cron. */
-export async function runJournal(env: Env): Promise<void> {
-  configureEndpoints(env);
-  const L = new Ledger(env, 0);
-  const since = Date.now() - 24 * 3600 * 1000;
-  const last = await env.DB.prepare("SELECT MAX(ts) AS ts FROM journal").first<{ ts: number | null }>();
-  if (last?.ts && last.ts > Date.now() - 20 * 3600 * 1000) return;
-  const closed = (await env.DB.prepare("SELECT symbol, horizon, cost_pusd, exit_pusd, close_reason FROM positions WHERE status = 'closed' AND closed_at >= ?").bind(since).all()).results;
-  const vetoes = (await env.DB.prepare("SELECT message FROM events WHERE kind = 'risk-fail' AND ts >= ?").bind(since).all()).results;
-  const card = scorecard(await L.closedSince(30 * 86400 * 1000), 30);
-  const stats = { closed, scorecard_30d: card, vetoes: vetoes.length, value_now: await L.valueAt(0), value_24h_ago: await L.valueAt(24 * 3600 * 1000) };
-  await L.status("zara", "writing the daily journal");
-  let text: string;
-  let lessons: string[] = [];
-  if (hasGrok(env)) {
-    const r = await askAgent<{ journal: string; lessons: string[]; strategy_suggestion?: string }>(env, "zara", "Write today's journal.", { ...stats, strategy: "see STRATEGY in your instructions" });
-    text = r.journal;
-    lessons = r.lessons ?? [];
-    if (r.strategy_suggestion) await L.log("zara", "suggestion", `Suggested strategy change for the owner: ${r.strategy_suggestion}`);
-  } else {
-    const wins = closed.filter((c) => Number(c.exit_pusd) > Number(c.cost_pusd)).length;
-    text = `${closed.length} positions closed in 24h, ${wins} winners. ${vetoes.length} proposals failed risk checks. Portfolio ${round(stats.value_now ?? 0)} PUSD.`;
-  }
-  await env.DB.prepare("INSERT INTO journal (ts, text, lessons) VALUES (?, ?, ?)").bind(Date.now(), text, JSON.stringify(lessons)).run();
-  for (const lesson of lessons) await env.DB.prepare("INSERT INTO lessons (ts, lesson) VALUES (?, ?)").bind(Date.now(), lesson).run();
-  await L.log("zara", "journal", text, { lessons });
-  await L.status("zara", "idle");
-}
+export { loadKnowledge };

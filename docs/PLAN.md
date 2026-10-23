@@ -5,7 +5,8 @@ _Status: v0.2, 2026-10-23. Owner: Jørgen S. Notland._
 ## Decisions so far (2026-10-23)
 
 - Home asset is **ParyonUSD (PUSD)**, category `2469acc5…a02544`.
-- Bots run as **Grok via the xAI API from a Cloudflare Worker** (cron every 15 min). Vela uses Grok's X and web search, so no X API key is needed.
+- Bots run **inside the Grok Bot app**: the owner pastes the repo into Grok Bot, it reads `GROK_BOT.md`, creates a 15-minute routine and calls the desk's `/api/bot/*` API with a `BOT_TOKEN`. No xAI or X API key is needed; Grok's own X and web search does the sentiment and research. (A fallback mode, `BRAIN = "xai-api"`, lets the Worker call the xAI API itself.)
+- The Worker cron (every 15 min) still marks prices, exits on stops and targets, and discovers new Cauldron tokens and launchpad sales on its own.
 - Desk, API and database (**D1**) all live on **Cloudflare**. D1 records every trade, position, lesson, snapshot, market tick and bot message.
 - **Fully automated trading.** The only human input is strategy, edited on the desk.
 - **GitHub is for code only; all data lives in D1**: strategy, risk limits, market notes, roles and team graph (versioned), trades, positions, proposals, every Grok prompt and reply, scorecards, lessons and market ticks. `seed/` holds starter defaults copied in on first run.
@@ -61,14 +62,14 @@ Key implication: because everything is quoted against BCH, every trade is effect
 Components:
 
 1. **Market data service**: polls the indexer (token list, prices, candles, volume, TVL, latest txs) and keeps a live router subscription for watched pairs. Writes snapshots to the event store.
-2. **Bot runtime**: runs each bot as a Grok (xAI API) agent with a role prompt, a skill set (tools) and a schedule. Bots never touch keys or the network directly; they call tools.
+2. **Bot runtime**: runs each bot as a role Grok Bot plays with a role prompt, a skill set (tools) and a schedule. Bots never touch keys or the network directly; they call tools.
 3. **Risk engine**: deterministic code, not an LLM. Every proposed order passes through it. It can only shrink or reject, never enlarge.
 4. **Execution service**: gets a quote, calls `tx.build`, **verifies the unsigned tx matches the quote** (amounts, outputs, fee, destination is our wallet), then sends it to the signer.
 5. **Signer**: separate process with the hot wallet key, a hard per-tx and per-day cap, and an allow-list of output scripts. Disabled entirely in paper mode.
 6. **Event store + ledger**: SQLite (Postgres later). Every bot message, decision, order, fill and balance snapshot is an append-only event. The ledger values everything in PUSD.
 7. **Trading desk web view**: read-only dashboard plus an owner-only kill switch.
 
-Tech choices: TypeScript, one Cloudflare Worker (cron + API + static desk), D1 (SQLite), Grok via the xAI API. Later, for live mode: `libauth` for transaction verification and signing in an isolated signer.
+Tech choices: TypeScript, one Cloudflare Worker (cron + API + static desk), D1 (SQLite), Grok Bot calling the desk API. Later, for live mode: `libauth` for transaction verification and signing in an isolated signer.
 
 ## 4. The bot team
 
@@ -179,7 +180,7 @@ Launching tomorrow in paper mode gets the desk and team visible on schedule with
 1. **"Parity USD" = ParyonUSD (PUSD)?** That's the only BCH stablecoin matching the name, and it has the deepest Cauldron pool. Confirm.
 2. **Starting capital and caps**: how much goes in the hot wallet at go-live, and what max per trade / per day / max drawdown are you comfortable with?
 3. **Launch mode**: OK to launch tomorrow in paper mode and switch to live only after you approve?
-4. **Grok access**: do you have an xAI API key and a preferred model? (It will be stored as a secret, never in the repo.)
+4. **Grok access**: answered. The team runs in the Grok Bot app with a `BOT_TOKEN`; no xAI key.
 5. **Hosting**: where should the desk and bots run (your VPS, Fly.io, Vercel + a worker)? Public URL or password-protected?
 6. **Wallet**: generate a fresh dedicated wallet, or use riftenlabs-cli's built-in wallet?
 7. **Alerts**: Telegram bot for alerts and kill switch?

@@ -71,6 +71,14 @@ export async function candles(token: string, days: number, stepSeconds: number):
   return rows as Candle[];
 }
 
+/** Launchpad (IDO) sales. The launchpad API lives next to /cauldron on the same indexer host. */
+export async function launchpadList(): Promise<Record<string, unknown>[]> {
+  const res = await fetch(indexer.replace(/\/cauldron$/, "") + "/ido/list?limit=100", { headers: { accept: "application/json" } });
+  if (!res.ok) throw new Error(`launchpad: ${res.status}`);
+  const r = await res.json();
+  return Array.isArray(r) ? r : ((r as { idos?: Record<string, unknown>[] }).idos ?? []);
+}
+
 /** Exact-in quote from the Cauldron router. sell/buy are "bch" or a token category. */
 export async function routerQuote(sell: string, buy: string, amount: bigint): Promise<Quote> {
   const res = await fetch(router, { headers: { Upgrade: "websocket" } });

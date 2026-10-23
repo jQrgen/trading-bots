@@ -1,5 +1,6 @@
 import type { Env } from "./config";
 import { runCycle, runJournal } from "./loop";
+import { handleBot } from "./bot";
 import { loadKnowledge, parseRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
 
 const json = (data: unknown, status = 200) =>
@@ -20,6 +21,7 @@ export default {
     const p = url.pathname;
     try {
       if (p.startsWith("/api/admin/")) return admin(req, env, ctx, p);
+      if (p.startsWith("/api/bot/")) return handleBot(req, env, p);
       if (p === "/api/state") return json(await state(env));
       if (p === "/api/events") {
         const after = Number(url.searchParams.get("after") ?? 0);
@@ -71,6 +73,22 @@ export default {
       }
       const call = p.match(/^\/api\/agent-calls\/(\d+)$/);
       if (call) return json(await env.DB.prepare("SELECT * FROM agent_calls WHERE id = ?").bind(Number(call[1])).first());
+      if (p === "/api/research") {
+        const token = url.searchParams.get("token");
+        const q = token
+          ? env.DB.prepare("SELECT * FROM research_notes WHERE token_id = ? ORDER BY ts DESC LIMIT 100").bind(token)
+          : env.DB.prepare("SELECT * FROM research_notes ORDER BY ts DESC LIMIT 100");
+        return json((await q.all()).results);
+      }
+      if (p === "/api/sentiment") {
+        const subject = url.searchParams.get("subject");
+        const q = subject
+          ? env.DB.prepare("SELECT * FROM sentiment WHERE subject = ? ORDER BY ts DESC LIMIT 200").bind(subject)
+          : env.DB.prepare("SELECT * FROM sentiment ORDER BY ts DESC LIMIT 200");
+        return json((await q.all()).results);
+      }
+      if (p === "/api/tokens") return json((await env.DB.prepare("SELECT * FROM tokens_seen ORDER BY first_seen DESC LIMIT 500").all()).results);
+      if (p === "/api/launchpad") return json((await env.DB.prepare("SELECT id, offered_token_id, status, data, first_seen, updated_at FROM launchpad ORDER BY first_seen DESC").all()).results);
       if (p === "/api/lessons") return json((await env.DB.prepare("SELECT * FROM lessons ORDER BY id DESC LIMIT 200").all()).results);
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
       return env.ASSETS.fetch(req);
