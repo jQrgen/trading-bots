@@ -49,8 +49,13 @@ export default {
       if (p === "/api/snapshots") {
         const days = Math.min(Number(url.searchParams.get("days") ?? 7), 365);
         // Only the current book: the live chart starts at the switch instead of falling off the paper book.
-        const rows = await env.DB.prepare("SELECT ts, total_pusd, bch_pusd FROM snapshots WHERE ts >= ? AND mode = ? ORDER BY ts").bind(Date.now() - days * 86400000, await modeOf(env)).all();
-        return json(rows.results);
+        const mode = await modeOf(env);
+        const rows = await env.DB.prepare("SELECT ts, total_pusd, bch_pusd FROM snapshots WHERE ts >= ? AND mode = ? ORDER BY ts").bind(Date.now() - days * 86400000, mode).all<{ ts: number; total_pusd: number; bch_pusd: number }>();
+        if (mode !== "live") return json(rows.results);
+        // Live: lift each past value by the owner's deposits (less withdrawals) after it, so top-ups don't read as gains.
+        // raw_total_pusd keeps what the wallet actually held then.
+        const flows = (await env.DB.prepare("SELECT ts, pusd FROM capital_flows ORDER BY ts").all<{ ts: number; pusd: number }>().catch(() => ({ results: [] as { ts: number; pusd: number }[] }))).results;
+        return json(rows.results.map((r) => ({ ...r, raw_total_pusd: r.total_pusd, total_pusd: r.total_pusd + flows.filter((f) => f.ts > r.ts).reduce((a, f) => a + f.pusd, 0) })));
       }
       if (p === "/api/wallet") return json(await walletInfo(env));
       if (p === "/api/trades") return json((await env.DB.prepare("SELECT * FROM trades ORDER BY id DESC LIMIT 500").all()).results);
@@ -244,7 +249,7 @@ async function state(env: Env) {
     db.prepare("SELECT * FROM positions WHERE status = 'open' ORDER BY opened_at DESC").all<Record<string, number | string>>(),
     db.prepare("SELECT * FROM agent_status").all(),
     db.prepare("SELECT key, value FROM settings").all<{ key: string; value: string }>(),
-    db.prepare("SELECT cost_pusd, exit_pusd FROM positions WHERE status = 'closed'").all<{ cost_pusd: number; exit_pusd: number }>(),
+    db.prepare("SELECT cost_pusd, exit_pusd, closed_at FROM positions WHERE status = 'closed'").all<{ cost_pusd: number; exit_pusd: number; closed_at: number }>(),
     db.prepare("SELECT ts, total_pusd FROM snapshots ORDER BY ts DESC LIMIT 1").first<{ ts: number; total_pusd: number }>(),
   ]);
   const s = Object.fromEntries(settings.results.map((r) => [r.key, r.value]));
@@ -253,8 +258,15 @@ async function state(env: Env) {
   const marks = s.marks ? (JSON.parse(s.marks) as { prices: Record<string, number>; decimals: Record<string, number>; bch_pusd: number; ts: number }) : null;
   const value = (asset: string, amount: number) =>
     asset === "pusd" ? amount / 100 : marks?.prices[asset] ? (amount / 10 ** (marks.decimals[asset] ?? 0)) * marks.prices[asset] : 0;
-  const wins = closed.results.filter((c) => c.exit_pusd > c.cost_pusd).length;
-  const realized = closed.results.reduce((a, c) => a + c.exit_pusd - c.cost_pusd, 0);
+  // Live scores only trades closed since going live; the paper book's results stay in its archive.
+  const scored = s.mode === "live" ? closed.results.filter((c) => c.closed_at >= Number(s.live_since || 0)) : closed.results;
+  const wins = scored.filter((c) => c.exit_pusd > c.cost_pusd).length;
+  const realized = scored.reduce((a, c) => a + c.exit_pusd - c.cost_pusd, 0);
+  const ledger = new Ledger(env, 0);
+  // Value 24h ago, already net of deposits and withdrawals since; a book younger than a day uses its first snapshot.
+  const firstTs = (await db.prepare("SELECT MIN(ts) AS ts FROM snapshots WHERE mode = ?").bind(s.mode === "live" ? "live" : "paper").first<{ ts: number | null }>())?.ts;
+  const span = firstTs ? Math.min(24 * 3600 * 1000, Date.now() - firstTs) : 0;
+  const dayAgo = span > 0 ? await ledger.valueAt(span).catch(() => null) : null;
   return {
     mode: s.mode === "live" ? "live" : "paper",
     halted: s.halted === "1",
@@ -278,6 +290,10 @@ async function state(env: Env) {
       last_seen: s.bot_last_seen ? Number(s.bot_last_seen) : null,
       last_auth_failure: s.bot_last_auth_failure ? JSON.parse(s.bot_last_auth_failure) : null,
     },
-    stats: { closed: closed.results.length, wins, win_rate: closed.results.length ? wins / closed.results.length : null, realized_pusd: realized },
+    stats: {
+      closed: scored.length, wins, win_rate: scored.length ? wins / scored.length : null, realized_pusd: realized,
+      // Change over 24h, net of the owner's deposits and withdrawals (live). Null until there is a snapshot that old.
+      change_24h_pusd: last && dayAgo != null ? last.total_pusd - dayAgo : null,
+    },
   };
 }
