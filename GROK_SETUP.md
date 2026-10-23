@@ -27,7 +27,7 @@ Each cycle Orin scans the market, new tokens and the launchpad; Vela researches 
 
 The `BRAIN` variable in `wrangler.toml` picks who thinks: `grok-bot` (default, the Grok Bot app), `xai-api` (the Worker calls the xAI API itself, needs `XAI_API_KEY`) or `rules` (simple rules, for testing).
 
-**Mode is PAPER.** Fills are simulated against live Cauldron quotes. Live trading with real keys is deliberately not built yet; it needs the owner's explicit approval.
+**Mode is PAPER until the owner presses Go live on the desk.** Paper fills are simulated against live Cauldron quotes. Live mode trades real money from a dedicated wallet whose seed is the `WALLET_SEED` secret; see "Live trading" in README.md. Only the owner switches modes.
 
 ## One-time setup (deploys from GitHub Actions)
 

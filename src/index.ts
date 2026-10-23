@@ -4,6 +4,7 @@ import { botKey, checkBotToken, handleBot } from "./bot";
 import GROK_BOT from "../GROK_BOT.md";
 import { loadKnowledge, parseRiskLimits, saveKnowledge, seedKnowledge } from "./knowledge";
 import { describeRoles } from "./roles";
+import { goLive, goPaper, modeOf, setFrozen, walletInfo } from "./live";
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
@@ -44,9 +45,11 @@ export default {
       }
       if (p === "/api/snapshots") {
         const days = Math.min(Number(url.searchParams.get("days") ?? 7), 365);
-        const rows = await env.DB.prepare("SELECT ts, total_pusd, bch_pusd FROM snapshots WHERE ts >= ? ORDER BY ts").bind(Date.now() - days * 86400000).all();
+        // Only the current book: the live chart starts at the switch instead of falling off the paper book.
+        const rows = await env.DB.prepare("SELECT ts, total_pusd, bch_pusd FROM snapshots WHERE ts >= ? AND mode = ? ORDER BY ts").bind(Date.now() - days * 86400000, await modeOf(env)).all();
         return json(rows.results);
       }
+      if (p === "/api/wallet") return json(await walletInfo(env));
       if (p === "/api/trades") return json((await env.DB.prepare("SELECT * FROM trades ORDER BY id DESC LIMIT 500").all()).results);
       if (p === "/api/positions") return json((await env.DB.prepare("SELECT * FROM positions ORDER BY id DESC LIMIT 500").all()).results);
       if (p === "/api/journal") return json((await env.DB.prepare("SELECT * FROM journal ORDER BY id DESC LIMIT 60").all()).results);
@@ -145,6 +148,21 @@ async function admin(req: Request, env: Env, ctx: ExecutionContext, p: string) {
     await env.DB.prepare("INSERT INTO events (ts, agent, kind, message) VALUES (?, 'desk', 'admin', ?)").bind(Date.now(), halted ? "Owner HALTED the desk. Only exits will run." : "Owner resumed the desk.").run();
     return json({ halted });
   }
+  if (p === "/api/admin/live") {
+    if (body.confirm !== "GO LIVE") return json({ error: 'send {"confirm": "GO LIVE"} to trade real money' }, 400);
+    const r = await goLive(env, parseRiskLimits((await loadKnowledge(env)).get("risk-limits") ?? "{}")).catch((e: Error) => ({ ok: false, error: e.message }));
+    if (r.ok) ctx.waitUntil(runCycle(env));
+    return json(r, r.ok ? 200 : 400);
+  }
+  if (p === "/api/admin/paper") {
+    const r = await goPaper(env);
+    return json(r, r.ok ? 200 : 400);
+  }
+  if (p === "/api/admin/freeze") {
+    const frozen = body.frozen !== false;
+    await setFrozen(env, frozen);
+    return json({ frozen });
+  }
   if (p === "/api/admin/bot-token") return json({ token: await botKey(env, body.rotate === true) });
   if (p === "/api/admin/run") {
     ctx.waitUntil(runCycle(env));
@@ -201,9 +219,11 @@ async function state(env: Env) {
   const wins = closed.results.filter((c) => c.exit_pusd > c.cost_pusd).length;
   const realized = closed.results.reduce((a, c) => a + c.exit_pusd - c.cost_pusd, 0);
   return {
-    mode: env.MODE,
+    mode: s.mode === "live" ? "live" : "paper",
     halted: s.halted === "1",
-    start_pusd: Number(env.PAPER_START_PUSD),
+    frozen: s.frozen === "1",
+    live_since: s.live_since ? Number(s.live_since) : null,
+    start_pusd: s.mode === "live" ? (Number(s.live_start_pusd) || null) : Number(env.PAPER_START_PUSD),
     total_pusd: last?.total_pusd ?? null,
     updated_at: last?.ts ?? null,
     bch_pusd: marks?.bch_pusd ?? null,

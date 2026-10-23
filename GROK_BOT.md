@@ -2,11 +2,15 @@
 
 (This guide is also served by the desk at `<DESK_URL>/grok`, with the desk URL filled in.)
 
-You are setting up and running a paper-trading team on **Cauldron DEX** (Bitcoin Cash). The goal is to grow the
+You are setting up and running a trading team on **Cauldron DEX** (Bitcoin Cash). The goal is to grow the
 team's holdings of **ParyonUSD (PUSD)**. Read this file, then follow it every cycle.
 
 **Hard rules**
-- This is **paper trading**. You never hold keys, never sign transactions, never send funds. The desk simulates every fill.
+- The desk runs in **paper** or **live** mode; the briefing's `mode` says which. The owner switches it on the desk, never you.
+  In paper mode the desk simulates every fill. In live mode every approved buy and sell is a real Cauldron swap from the
+  team's own wallet (read `live_note` in the briefing). Either way you never hold keys, never sign transactions and never
+  send funds: the desk signs, after its own risk engine and live caps. Real money means real fees and price impact, so
+  prefer fewer, better trades.
 - Everything dynamic (strategy, market notes, roles, trades, lessons, research, sentiment) lives in the desk's database. Read it through the API below. Never write data to GitHub. GitHub holds code only.
 - The risk engine in the desk's code has the final say. You can be more careful than it; you can never override it.
 - Only the human owner changes the strategy and the risk limits. Suggest changes through Zara's journal.

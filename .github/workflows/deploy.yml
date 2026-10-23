@@ -57,8 +57,11 @@ jobs:
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          # The bots' live wallet (seed phrase, or a single WIF key). Live trading stays off until the owner presses Go live.
+          WALLET_SEED: ${{ secrets.WALLET_SEED }}
+          WALLET_WIF: ${{ secrets.WALLET_WIF }}
         run: |
-          jq -n '{XAI_API_KEY: env.XAI_API_KEY, ADMIN_TOKEN: env.ADMIN_TOKEN, BOT_TOKEN: env.BOT_TOKEN} | with_entries(select(.value != ""))' > secrets.json
+          jq -n '{XAI_API_KEY: env.XAI_API_KEY, ADMIN_TOKEN: env.ADMIN_TOKEN, BOT_TOKEN: env.BOT_TOKEN, WALLET_SEED: env.WALLET_SEED, WALLET_WIF: env.WALLET_WIF} | with_entries(select(.value != ""))' > secrets.json
           npx wrangler secret bulk secrets.json
           rm secrets.json
       - name: Tell the desk what changed and run a cycle
@@ -85,5 +88,7 @@ jobs:
             curl -sS "$DESK_URL/api/bot/check" -H "authorization: Bearer $BOT_TOKEN"; echo
           fi
           echo "Desk state after the first cycle:"
-          curl -fsS "$DESK_URL/api/state" | jq -c '{mode, halted, total_pusd, grok_bot}' || true
+          curl -fsS "$DESK_URL/api/state" | jq -c '{mode, halted, frozen, total_pusd, grok_bot}' || true
+          echo "Live wallet:"
+          curl -fsS "$DESK_URL/api/wallet" | jq -c '{mode, has_secret, address, pusd, bch_sats, error}' || true
           curl -fsS "$DESK_URL/api/events?limit=10" | jq -r '.[] | "\(.agent) \(.kind): \(.message)"' || true
