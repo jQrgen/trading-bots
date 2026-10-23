@@ -118,6 +118,10 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(store.files.allSatisfy { $0.body == nil }, "the list call has no file text")
         let file = try? await store.service.file(path: "notes/watchlist.md")
         XCTAssertNotNil(file?.body)
+        XCTAssertEqual(store.openLiquidity.count, 1)
+        XCTAssertEqual(store.closedLiquidity.count, 1)
+        XCTAssertEqual(store.review(of: 11)?.process, "minor")
+        XCTAssertEqual(store.scorecard?.holdingTimes.map { $0.label }, ["1-24h", "1-7d"])
 
         // A second refresh only asks for newer events and must not duplicate.
         let count = store.events.count
@@ -163,6 +167,8 @@ final class StoreTests: XCTestCase {
             func launchpad() async throws -> [LaunchpadSale] { [] }
             func files() async throws -> [BotFile] { [] }
             func file(path: String) async throws -> BotFile { throw DeskError.http(status: 404, message: nil) }
+            func liquidity() async throws -> [LiquidityPosition] { [] }
+            func reviews() async throws -> [TradeReview] { [] }
         }
         let store = DeskStore(service: Down())
         await store.refresh()
@@ -285,5 +291,48 @@ final class DiscoveryTests: XCTestCase {
 
         let client = try DeskClient(urlString: "desk.example.dev")
         XCTAssertEqual(client.url("api/research", ["token": "abc"]).absoluteString, "https://desk.example.dev/api/research?token=abc")
+    }
+}
+
+final class LiquidityTests: XCTestCase {
+    let decoder = DeskDecoder.make()
+
+    func testLiquidityPositions() throws {
+        let json = #"[{"id":1,"token_id":"abc","symbol":"ABC","status":"open","opened_at":1761220800000,"closed_at":null,"deposit_pusd":100,"bch_sats":1000,"tokens":50,"k":50000,"entry_price_sats":20,"stop_pct":8,"fees_pusd":1.5,"last_accrual_ts":1761220800000,"value_pusd":103,"il_pct":-0.4,"signal":"fee-yield","thesis":"busy pool","exit_pusd":null,"close_reason":null},{"id":2,"token_id":"x","symbol":"X","status":"closed","opened_at":1761220800000,"closed_at":1761224400000,"deposit_pusd":50,"value_pusd":49,"exit_pusd":45,"close_reason":"stop"}]"#
+        let rows = try decoder.decode(LossyArray<LiquidityPosition>.self, from: Data(json.utf8)).items
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows[0].isOpen)
+        XCTAssertEqual(rows[0].pnlPusd, 3)
+        XCTAssertEqual(rows[0].ilPct, -0.4)
+        XCTAssertEqual(rows[1].pnlPusd, -5, "a closed position uses its exit")
+        XCTAssertEqual(rows[1].pnlPct, -10)
+        XCTAssertEqual(rows[1].feesPusd, 0)
+    }
+
+    func testReviews() throws {
+        let json = #"[{"position_id":7,"ts":1761220800000,"symbol":"ABC","process":"major","break_stage":"sizing","outcome_pusd":-4.5,"outcome_r":-1.6,"stop_overshoot_pct":6.2,"finding":"Sized past the limit.","agent":"zara"}]"#
+        let reviews = try decoder.decode(LossyArray<TradeReview>.self, from: Data(json.utf8)).items
+        XCTAssertEqual(reviews.first?.id, 7)
+        XCTAssertEqual(reviews.first?.breakStage, "sizing")
+        XCTAssertEqual(reviews.first?.outcomeR, -1.6)
+    }
+
+    func testGrokBotStatusAndHoldingTime() throws {
+        let state = #"{"mode":"paper","halted":false,"holdings":[],"positions":[],"agents":[],"stats":{"closed":0,"wins":0},"grok_bot":{"token_created_at":1761220800000,"last_seen":1761224400000,"last_auth_failure":{"ts":1761228000000,"reason":"bad token"}}}"#
+        let s = try decoder.decode(DeskState.self, from: Data(state.utf8))
+        XCTAssertEqual(s.grokBot?.currentFailure?.reason, "bad token", "a rejection after the last good call is current")
+
+        let ok = #"{"mode":"paper","grok_bot":{"token_created_at":null,"last_seen":1761231600000,"last_auth_failure":{"ts":1761228000000,"reason":"old"}}}"#
+        XCTAssertNil(try decoder.decode(DeskState.self, from: Data(ok.utf8)).grokBot?.currentFailure)
+
+        let card = #"{"ts":1761220800000,"window_days":30,"overall":{"trades":3,"win_rate":0.5,"avg_pnl_pct":1,"pnl_pusd":2},"by_horizon":{},"by_signal":{},"by_holding_time":{"over 7d":{"trades":1,"win_rate":1,"avg_pnl_pct":9,"pnl_pusd":5},"under 1h":{"trades":2,"win_rate":0,"avg_pnl_pct":-2,"pnl_pusd":-3}}}"#
+        let sc = try decoder.decode(Scorecard.self, from: Data(card.utf8))
+        XCTAssertEqual(sc.holdingTimes.map { $0.label }, ["under 1h", "over 7d"])
+    }
+
+    func testLiquiditySidesCountAsBuysAndSells() {
+        let t = Date()
+        XCTAssertTrue(Trade(id: 1, ts: t, mode: .paper, side: "lp-in", tokenId: "a", symbol: "A", amount: 1, pusd: 1, pricePusd: nil,
+                            impactPct: nil, estimated: false, positionId: nil, reason: nil).isBuy)
     }
 }

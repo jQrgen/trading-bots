@@ -127,13 +127,17 @@ public struct Scorecard: Decodable, Hashable, Sendable {
     public var overall: Bucket
     public var byHorizon: [String: Bucket]
     public var bySignal: [String: Bucket]
+    /// "under 1h", "1-24h", "1-7d" and "over 7d".
+    public var byHoldingTime: [String: Bucket]
 
-    public init(ts: Date?, windowDays: Int?, overall: Bucket, byHorizon: [String: Bucket], bySignal: [String: Bucket]) {
+    public init(ts: Date?, windowDays: Int?, overall: Bucket, byHorizon: [String: Bucket], bySignal: [String: Bucket],
+                byHoldingTime: [String: Bucket] = [:]) {
         self.ts = ts
         self.windowDays = windowDays
         self.overall = overall
         self.byHorizon = byHorizon
         self.bySignal = bySignal
+        self.byHoldingTime = byHoldingTime
     }
 
     public init(from decoder: Decoder) throws {
@@ -143,9 +147,17 @@ public struct Scorecard: Decodable, Hashable, Sendable {
         overall = try c.decode(Bucket.self, forKey: .overall)
         byHorizon = (try? c.decodeIfPresent([String: Bucket].self, forKey: .byHorizon)) ?? [:]
         bySignal = (try? c.decodeIfPresent([String: Bucket].self, forKey: .bySignal)) ?? [:]
+        byHoldingTime = (try? c.decodeIfPresent([String: Bucket].self, forKey: .byHoldingTime)) ?? [:]
     }
 
-    enum CodingKeys: String, CodingKey { case ts, windowDays, overall, byHorizon, bySignal }
+    enum CodingKeys: String, CodingKey { case ts, windowDays, overall, byHorizon, bySignal, byHoldingTime }
+
+    /// Holding-time buckets from shortest to longest.
+    public var holdingTimes: [(label: String, bucket: Bucket)] {
+        let order = ["under 1h", "1-24h", "1-7d", "over 7d"]
+        return byHoldingTime.sorted { (order.firstIndex(of: $0.key) ?? order.count, $0.key) < (order.firstIndex(of: $1.key) ?? order.count, $1.key) }
+            .map { (label: $0.key, bucket: $0.value) }
+    }
 }
 
 /// GET /api/proposals — every trade idea and what happened to it.

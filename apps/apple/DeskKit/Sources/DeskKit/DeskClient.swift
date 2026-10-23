@@ -31,6 +31,10 @@ public protocol DeskService: Sendable {
     func files() async throws -> [BotFile]
     /// One shared note including its text.
     func file(path: String) async throws -> BotFile
+    /// Paper liquidity positions, open ones first.
+    func liquidity() async throws -> [LiquidityPosition]
+    /// Zara's reviews of closed trades.
+    func reviews() async throws -> [TradeReview]
 }
 
 public enum DeskError: LocalizedError, Equatable {
@@ -140,6 +144,8 @@ public struct DeskClient: DeskService {
     public func tokens() async throws -> [TokenSeen] { try await list("api/tokens") }
     public func launchpad() async throws -> [LaunchpadSale] { try await list("api/launchpad") }
     public func files() async throws -> [BotFile] { try await list("api/files") }
+    public func liquidity() async throws -> [LiquidityPosition] { try await list("api/liquidity") }
+    public func reviews() async throws -> [TradeReview] { try await list("api/reviews") }
 
     public func file(path: String) async throws -> BotFile {
         // The Worker decodes the rest of the URL, so slashes in the path can stay as they are.

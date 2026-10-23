@@ -29,7 +29,8 @@ public struct DemoDesk: DeskService {
                 AgentStatus(agent: "rune", status: "Filled BUY FURU (paper)", updatedAt: ago(3)),
                 AgentStatus(agent: "zara", status: "Journal due 21:00 UTC", updatedAt: ago(40)),
             ],
-            stats: .init(closed: 9, wins: 6, winRate: 6.0 / 9.0, realizedPusd: 31.80)
+            stats: .init(closed: 9, wins: 6, winRate: 6.0 / 9.0, realizedPusd: 31.80),
+            grokBot: GrokBotStatus(tokenCreatedAt: ago(60 * 24 * 2), lastSeen: ago(4))
         )
     }
 
@@ -165,7 +166,9 @@ public struct DemoDesk: DeskService {
                   byHorizon: ["short": .init(trades: 5, winRate: 0.4, avgPnlPct: -1.2, pnlPusd: -4.1),
                               "medium": .init(trades: 4, winRate: 1, avgPnlPct: 9.1, pnlPusd: 35.9)],
                   bySignal: ["volume-spike": .init(trades: 4, winRate: 0.75, avgPnlPct: 6.0, pnlPusd: 22.0),
-                             "breakout": .init(trades: 5, winRate: 0.6, avgPnlPct: 1.3, pnlPusd: 9.8)])
+                             "breakout": .init(trades: 5, winRate: 0.6, avgPnlPct: 1.3, pnlPusd: 9.8)],
+                  byHoldingTime: ["1-24h": .init(trades: 4, winRate: 0.5, avgPnlPct: 0.8, pnlPusd: 3.2),
+                                  "1-7d": .init(trades: 5, winRate: 0.8, avgPnlPct: 5.4, pnlPusd: 28.6)])
     }
 
     public func proposals(limit: Int) async throws -> [Proposal] {
@@ -263,5 +266,25 @@ public struct DemoDesk: DeskService {
             BotFile(path: "notes/watchlist.md", version: 4, updatedBy: "vela", updatedAt: ago(35), body: watchlist),
             BotFile(path: "notes/handover.md", version: 12, updatedBy: "nova", updatedAt: ago(4), body: handover),
         ].map { var f = $0; f.bytes = f.body?.utf8.count; return f }
+    }
+
+    public func liquidity() async throws -> [LiquidityPosition] {
+        [
+            LiquidityPosition(id: 3, tokenId: "furu", symbol: "FURU", status: "open", openedAt: ago(60 * 20), depositPusd: 120,
+                              feesPusd: 1.84, valuePusd: 121.10, ilPct: -0.6, stopPct: 8, signal: "fee-yield",
+                              thesis: "Busy pool with steady two-way volume; fees should outpace impermanent loss."),
+            LiquidityPosition(id: 2, tokenId: "zbch", symbol: "ZBCH", status: "closed", openedAt: ago(60 * 24 * 4), closedAt: ago(60 * 24),
+                              depositPusd: 80, feesPusd: 2.10, valuePusd: 76.30, ilPct: -6.9, stopPct: 8, signal: "fee-yield",
+                              thesis: "High volume after the listing.", exitPusd: 76.30, closeReason: "Price trended one way; impermanent loss beat the fees"),
+        ]
+    }
+
+    public func reviews() async throws -> [TradeReview] {
+        [
+            TradeReview(positionId: 12, ts: ago(170), symbol: "ZBCH", process: "clean", outcomePusd: 9.30, outcomeR: 2.2,
+                        finding: "Followed the plan: took profit at target."),
+            TradeReview(positionId: 11, ts: ago(600), symbol: "MOON", process: "minor", breakStage: "exit", outcomePusd: -2.40, outcomeR: -1.3,
+                        stopOvershootPct: 3.1, finding: "Stop filled 3.1% past the level on a thin pool. Size smaller on pools under 10 BCH."),
+        ]
     }
 }

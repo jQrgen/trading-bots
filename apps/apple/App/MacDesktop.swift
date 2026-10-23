@@ -169,7 +169,7 @@ struct MacActivityView: View {
 // MARK: - Trades and positions tables
 
 struct MacTradesView: View {
-    enum Tab: String, CaseIterable { case ideas = "Ideas", fills = "Fills", open = "Open positions", closed = "Closed positions" }
+    enum Tab: String, CaseIterable { case ideas = "Ideas", fills = "Fills", open = "Open positions", closed = "Closed positions", liquidity = "Liquidity" }
 
     @Environment(DeskStore.self) private var store
     @State private var tab = Tab.fills
@@ -177,6 +177,8 @@ struct MacTradesView: View {
     @State private var tradeSelection: Trade.ID?
     @State private var positionSelection: Position.ID?
     @State private var proposalSelection: Proposal.ID?
+    @State private var liquiditySelection: LiquidityPosition.ID?
+    @State private var liquiditySort = [KeyPathComparator(\LiquidityPosition.openedAt, order: .reverse)]
     @State private var proposalSort = [KeyPathComparator(\Proposal.ts, order: .reverse)]
     @State private var tradeSort = [KeyPathComparator(\Trade.id, order: .reverse)]
     @State private var positionSort = [KeyPathComparator(\Position.id, order: .reverse)]
@@ -188,6 +190,7 @@ struct MacTradesView: View {
             case .fills: tradesTable
             case .open: positionsTable(store.openPositions)
             case .closed: positionsTable(store.closedPositions)
+            case .liquidity: liquidityTable
             }
         }
         .searchable(text: $search, prompt: "Search tokens")
@@ -200,7 +203,7 @@ struct MacTradesView: View {
             }
         }
         .inspector(isPresented: inspectorShown) { inspector.inspectorColumnWidth(min: 280, ideal: 340) }
-        .onChange(of: tab) { tradeSelection = nil; positionSelection = nil; proposalSelection = nil }
+        .onChange(of: tab) { clearSelection() }
         .navigationTitle("Trades")
         .deskToolbar()
     }
@@ -243,7 +246,7 @@ struct MacTradesView: View {
             TableColumn("Side", value: \.side) { t in
                 Text(t.side.uppercased()).fontWeight(.semibold).foregroundStyle(t.isBuy ? Color.up : Color.down)
             }
-            .width(50)
+            .width(60)
             TableColumn("Token", value: \.symbol)
                 .width(min: 60, ideal: 80)
             TableColumn("PUSD", value: \.pusd) { Text(Format.pusd($0.pusd)).monospacedDigit() }
@@ -289,6 +292,40 @@ struct MacTradesView: View {
         }
     }
 
+    private var liquidityTable: some View {
+        Table(store.liquidity.filter { matches($0.symbol) }.sorted(using: liquiditySort), selection: $liquiditySelection, sortOrder: $liquiditySort) {
+            TableColumn("Pool", value: \.symbol)
+                .width(min: 60, ideal: 80)
+            TableColumn("Status", value: \.status) { Text($0.status) }
+                .width(55)
+            TableColumn("Deposit", value: \.depositPusd) { Text(Format.pusd($0.depositPusd)).monospacedDigit() }
+                .width(min: 70, ideal: 90)
+            TableColumn("Fees (est.)", value: \.feesPusd) { Text(Format.pusd($0.feesPusd)).monospacedDigit() }
+                .width(min: 70, ideal: 80)
+            TableColumn("IL") { Text(Format.signedPct($0.ilPct)).monospacedDigit() }
+                .width(60)
+            TableColumn("P&L", value: \.sortablePnl) { p in
+                Text("\(Format.signed(p.pnlPusd)) (\(Format.signedPct(p.pnlPct)))")
+                    .monospacedDigit()
+                    .foregroundStyle(Color.pnl(p.pnlPusd))
+            }
+            .width(min: 110, ideal: 130)
+            TableColumn("Opened", value: \.openedAt) { Text(Format.dateTime($0.openedAt)).monospacedDigit() }
+                .width(min: 110, ideal: 120)
+            TableColumn("Thesis / close reason") { p in
+                let text = (p.isOpen ? p.thesis : p.closeReason) ?? ""
+                Text(text).lineLimit(1).help(text)
+            }
+        }
+    }
+
+    private func clearSelection() {
+        tradeSelection = nil
+        positionSelection = nil
+        proposalSelection = nil
+        liquiditySelection = nil
+    }
+
     @ViewBuilder
     private var inspector: some View {
         if tab == .ideas, let p = store.proposals.first(where: { $0.id == proposalSelection }) {
@@ -297,11 +334,13 @@ struct MacTradesView: View {
             TradeDetailView(trade: t)
         } else if tab == .open || tab == .closed, let p = (store.openPositions + store.closedPositions).first(where: { $0.id == positionSelection }) {
             PositionDetailView(position: p)
+        } else if tab == .liquidity, let p = store.liquidity.first(where: { $0.id == liquiditySelection }) {
+            LiquidityDetailView(position: p)
         }
     }
 
     private var inspectorShown: Binding<Bool> {
-        Binding(get: { hasSelection }, set: { if !$0 { tradeSelection = nil; positionSelection = nil; proposalSelection = nil } })
+        Binding(get: { hasSelection }, set: { if !$0 { clearSelection() } })
     }
 
     private var hasSelection: Bool {
@@ -309,12 +348,17 @@ struct MacTradesView: View {
         case .ideas: return proposalSelection != nil
         case .fills: return tradeSelection != nil
         case .open, .closed: return positionSelection != nil
+        case .liquidity: return liquiditySelection != nil
         }
     }
 }
 
 extension Position {
     /// P&L with unknown values sorted as zero, for table sorting.
+    var sortablePnl: Double { pnlPusd ?? 0 }
+}
+
+extension LiquidityPosition {
     var sortablePnl: Double { pnlPusd ?? 0 }
 }
 #endif

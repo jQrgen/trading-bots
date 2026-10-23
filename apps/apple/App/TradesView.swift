@@ -2,7 +2,7 @@ import SwiftUI
 import DeskKit
 
 struct TradesView: View {
-    enum Tab: String, CaseIterable { case ideas = "Ideas", trades = "Fills", open = "Open", closed = "Closed" }
+    enum Tab: String, CaseIterable { case ideas = "Ideas", trades = "Fills", open = "Open", closed = "Closed", liquidity = "Liquidity" }
 
     @Environment(DeskStore.self) private var store
     @State private var tab = Tab.trades
@@ -31,10 +31,15 @@ struct TradesView: View {
                 case .closed:
                     if store.closedPositions.isEmpty { empty("No closed positions yet.") }
                     ForEach(store.closedPositions) { p in NavigationLink(value: p) { PositionRow(position: p) } }
+                case .liquidity:
+                    if store.liquidity.isEmpty { empty("No liquidity provided yet.") }
+                    ForEach(store.openLiquidity + store.closedLiquidity) { p in NavigationLink(value: p) { LiquidityRow(position: p) } }
                 }
             } footer: {
                 if tab == .trades {
                     Text("* Price impact estimated from pool reserves, not a router quote.")
+                } else if tab == .liquidity {
+                    Text("Paper liquidity in Cauldron pools, open positions first. Fees are estimates.")
                 }
             }
         }
@@ -42,6 +47,7 @@ struct TradesView: View {
         .navigationDestination(for: Proposal.self) { ProposalDetailView(proposal: $0) }
         .navigationDestination(for: Trade.self) { TradeDetailView(trade: $0) }
         .navigationDestination(for: Position.self) { PositionDetailView(position: $0) }
+        .navigationDestination(for: LiquidityPosition.self) { LiquidityDetailView(position: $0) }
         .deskToolbar()
     }
 
@@ -80,6 +86,7 @@ struct TradeDetailView: View {
 }
 
 struct PositionDetailView: View {
+    @Environment(DeskStore.self) private var store
     var position: Position
 
     var body: some View {
@@ -110,6 +117,9 @@ struct PositionDetailView: View {
             }
             if let thesis = position.thesis, !thesis.isEmpty {
                 Section("Thesis") { Text(thesis) }
+            }
+            if let review = store.review(of: position.id) {
+                Section("Zara's review") { ReviewRow(review: review, showSymbol: false) }
             }
         }
         .navigationTitle(position.symbol)
