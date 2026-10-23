@@ -1,6 +1,17 @@
 # Cauldron Trading Desk: Project Plan
 
-_Status: draft v0.1, 2026-10-23. Owner: Jørgen S. Notland._
+_Status: v0.2, 2026-10-23. Owner: Jørgen S. Notland._
+
+## Decisions so far (2026-10-23)
+
+- Home asset is **ParyonUSD (PUSD)**, category `2469acc5…a02544`.
+- Bots run as **Grok via the xAI API from a Cloudflare Worker** (cron every 15 min). Vela uses Grok's X and web search, so no X API key is needed.
+- Desk, API and database (**D1**) all live on **Cloudflare**. D1 records every trade, position, lesson, snapshot, market tick and bot message.
+- **Fully automated trading.** The only human input is strategy: `bots/STRATEGY.md`, role files, and hard limits in `src/config.ts`. Pushing to `main` deploys through a GitHub Action and announces the change to the team.
+- The repo is written so a Grok bot can read `GROK_SETUP.md` and set everything up.
+- Market pitfalls the bots must know are in `bots/MARKET.md`.
+- Launch on 2026-10-24 in **paper mode**. Live trading with keys comes only after the owner's explicit approval.
+- A native Apple app (iOS, macOS, tvOS) is built in a separate thread against the same API.
 
 ## 1. Goal
 
@@ -55,7 +66,7 @@ Components:
 6. **Event store + ledger**: SQLite (Postgres later). Every bot message, decision, order, fill and balance snapshot is an append-only event. The ledger values everything in PUSD.
 7. **Trading desk web view**: read-only dashboard plus an owner-only kill switch.
 
-Tech choices (proposed): TypeScript end to end. Node service for core/bots, `libauth` or `mainnet-js` for BCH tx verification and signing, Next.js (or Vite + React) for the desk, SQLite, deployed on one small VPS or Fly.io. Grok via the xAI API.
+Tech choices: TypeScript, one Cloudflare Worker (cron + API + static desk), D1 (SQLite), Grok via the xAI API. Later, for live mode: `libauth` for transaction verification and signing in an isolated signer.
 
 ## 4. The bot team
 
@@ -85,6 +96,17 @@ Reporting graph:
 The 24/7 loop: **Orin scans → Vela finds setups → Kade risk-checks → Nova approves → Rune executes → Zara logs, learns and alerts.**
 
 Each bot's skill and role live in the repo as files (`bots/<name>/ROLE.md`, `bots/<name>/skills/*.md`, `bots/<name>/tools.json`) so they're versioned and editable, and the graph lives in `graph/team.yaml`.
+
+## 4b. Self-improvement loop
+
+The team learns from its own results without a human in the loop for trading:
+
+1. **Every trade is recorded** in D1 with its horizon and the signal type that triggered it (`trades`, `positions`).
+2. **Scorecard**: each cycle, win rate and P&L for the last 30 days by horizon and by signal type are computed (`src/scorecard.ts`) and given to Orin, Vela and Nova. They lean into what works and demand stronger cases for what doesn't.
+3. **Adaptive sizing (code)**: a horizon that keeps losing (5+ trades, negative P&L) gets its bet size cut to 75%, 50% or 25% until it recovers. It can only shrink, never grow past the hard limits.
+4. **Lessons**: Zara's daily journal writes lessons that are fed straight back to Vela and Nova. The owner can reject a lesson.
+5. **Strategy suggestions**: Zara may suggest one concrete change to `bots/STRATEGY.md` backed by the scorecard. The owner decides and pushes it; the deploy action tells the team.
+6. **Market memory**: `market_ticks` stores price and liquidity for the top tokens every cycle, so liquidity trends feed Orin's scan and the history can be used for backtests later.
 
 ## 5. Strategy book (initial)
 

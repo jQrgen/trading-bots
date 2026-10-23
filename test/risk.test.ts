@@ -5,7 +5,7 @@ const proposal = (o: Partial<Proposal> = {}): Proposal => ({
   id: "p1", action: "buy", token_id: "t", symbol: "T", horizon: "medium", size_pct: 5, target_pct: 20, stop_pct: 10, thesis: "x", ...o,
 });
 const facts = (o: Partial<TokenFacts> = {}): TokenFacts => ({ tvlBch: 100, poolAgeHours: 1000, topOwnerSharePct: 40, canQuote: true, ...o });
-const book = (o: Partial<Book> = {}): Book => ({ totalPusd: 1000, byHorizonPusd: { short: 0, medium: 0, long: 0 }, heldPusd: 0, openShort: 0, dayChangePct: 0, ...o });
+const book = (o: Partial<Book> = {}): Book => ({ totalPusd: 1000, byHorizonPusd: { short: 0, medium: 0, long: 0 }, heldPusd: 0, openShort: 0, dayChangePct: 0, bchPusd: 300, ...o });
 
 describe("checkBuy", () => {
   it("passes a sane proposal at the requested size", () => {
@@ -37,6 +37,13 @@ describe("checkBuy", () => {
     expect(checkBuy(proposal(), facts({ tvlBch: 3 }), book(), false).pass).toBe(false);
     expect(checkBuy(proposal({ horizon: "short", size_pct: 2 }), facts({ poolAgeHours: 2 }), book(), false).pass).toBe(false);
     expect(checkBuy(proposal(), undefined, book(), false).pass).toBe(false);
+  });
+
+  it("caps size to a share of pool liquidity so we can exit", () => {
+    const v = checkBuy(proposal(), facts({ tvlBch: 30 }), book({ totalPusd: 100000 }), false);
+    expect(v.pass).toBe(true);
+    expect(v.allowedPusd).toBeCloseTo(180); // 2% of 30 BCH * 300 PUSD/BCH
+    expect(v.reasons.join()).toMatch(/pool liquidity/);
   });
 
   it("limits open short-term bets", () => {

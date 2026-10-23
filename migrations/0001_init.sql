@@ -27,6 +27,7 @@ CREATE TABLE positions (
   entry_price_pusd REAL NOT NULL,
   target_pct REAL NOT NULL,
   stop_pct REAL NOT NULL,
+  signal TEXT,
   thesis TEXT,
   opened_at INTEGER NOT NULL,
   closed_at INTEGER,

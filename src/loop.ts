@@ -3,6 +3,7 @@ import { activePools, configureEndpoints, candles, symbolOf, topTokens, tokensBy
 import { askAgent, hasGrok } from "./grok";
 import { Ledger, type Position } from "./ledger";
 import { Prices, simulateSwap } from "./market";
+import { scorecard, sizeScale } from "./scorecard";
 import { checkBuy, exitSignal, type Book, type Proposal, type TokenFacts } from "./risk";
 import NOVA from "../bots/nova/ROLE.md";
 import ORIN from "../bots/orin/ROLE.md";
@@ -50,7 +51,7 @@ async function cycleBody(env: Env, L: Ledger) {
   // Market data
   await L.status("orin", "scanning Cauldron");
   const list = await topTokens(150);
-  const held = await L.openPositions();
+  let held = await L.openPositions();
   const missing = held.map((p) => p.token_id).filter((id) => id !== "bch" && !list.some((t) => t.token_id === id));
   const tokens = new Map<string, TokenInfo>([...list, ...(await tokensByIds([PUSD, ...missing]))].map((t) => [t.token_id, t]));
   const prices = new Prices(tokens);
@@ -62,6 +63,7 @@ async function cycleBody(env: Env, L: Ledger) {
     const reason = now === null ? null : exitSignal(p.entry_price_pusd, now, p.target_pct, p.stop_pct);
     if (reason) await closePosition(L, prices, p, reason === "stop" ? "stop hit" : "target hit");
   }
+  held = await L.openPositions();
 
   const book = await bookOf(L, prices);
   await L.snapshot(book.total, prices.bchPusd);
@@ -69,7 +71,9 @@ async function cycleBody(env: Env, L: Ledger) {
   const dayChangePct = dayAgo ? ((book.total - dayAgo) / dayAgo) * 100 : 0;
   if (dayChangePct <= -RISK.dailyLossHaltPct) await L.log("kade", "risk", `Portfolio down ${dayChangePct.toFixed(1)}% in 24h. New buys paused.`);
 
-  // Orin: scan
+  // Orin: scan. Liquidity trend matters more than price on Cauldron: growing pools mean real interest.
+  const tvlDayAgo = await L.tvlAt(24 * 3600 * 1000);
+  const card = scorecard(await L.closedSince(30 * 86400 * 1000), 30);
   const digest = list
     .filter((t) => t.tvl_sats >= 2e8 && t.token_id !== PUSD)
     .map((t) => ({
@@ -79,21 +83,22 @@ async function cycleBody(env: Env, L: Ledger) {
       chg_24h_pct: (t.change_24h_bp ?? 0) / 100,
       chg_7d_pct: (t.change_7d_bp ?? 0) / 100,
       tvl_bch: round(t.tvl_sats / 1e8, 1),
+      tvl_chg_24h_pct: tvlDayAgo.get(t.token_id) ? round(((t.tvl_sats / 1e8 - tvlDayAgo.get(t.token_id)!) / tvlDayAgo.get(t.token_id)!) * 100, 1) : null,
       age_days: t.first_pool_ts ? round((Date.now() / 1000 - t.first_pool_ts) / 86400, 1) : null,
       rank: t.score_rank,
     }));
   await L.recordTicks(list.slice(0, 60).map((t) => ({ token_id: t.token_id, symbol: symbolOf(t), price_pusd: prices.tokenPusd(t.token_id), tvl_bch: t.tvl_sats / 1e8, chg_24h_pct: (t.change_24h_bp ?? 0) / 100, volume_sats: t.trade_volume ?? null })));
   let signals: Signal[];
   if (hasGrok(env)) {
-    const r = await askAgent<{ signals: Signal[]; note: string }>(env, ORIN, "Scan this market digest.", { bch_usd: round(prices.bchPusd), tokens: digest });
+    const r = await askAgent<{ signals: Signal[]; note: string }>(env, ORIN, "Scan this market digest.", { bch_usd: round(prices.bchPusd), signal_scorecard: card.by_signal, tokens: digest });
     signals = (r.signals ?? []).filter((s) => tokens.has(s.token_id)).slice(0, 5);
     await L.log("orin", "scan", r.note || `Scanned ${digest.length} tokens.`, { signals });
   } else {
     signals = digest
-      .filter((t) => t.chg_24h_pct > 5 && t.tvl_bch >= 5)
+      .filter((t) => t.chg_24h_pct > 5 && t.chg_24h_pct < 50 && t.tvl_bch >= 5 && (t.tvl_chg_24h_pct ?? 0) >= 0)
       .sort((a, b) => b.chg_24h_pct - a.chg_24h_pct)
       .slice(0, 3)
-      .map((t) => ({ token_id: t.token_id, symbol: t.symbol, signal: "24h momentum", why: `Up ${t.chg_24h_pct}% in 24h with ${t.tvl_bch} BCH liquidity.` }));
+      .map((t) => ({ token_id: t.token_id, symbol: t.symbol, signal: "momentum", why: `Up ${t.chg_24h_pct}% in 24h with ${t.tvl_bch} BCH liquidity${t.tvl_chg_24h_pct ? ` (${t.tvl_chg_24h_pct}% liquidity change)` : ""}.` }));
     await L.log("orin", "scan", `Scanned ${digest.length} tokens with liquidity, ${signals.length} momentum signals (rule-based, no Grok key).`, { signals });
   }
   for (const s of signals) await L.log("orin", "signal", `${s.symbol}: ${s.signal}. ${s.why}`, s);
@@ -116,12 +121,13 @@ async function cycleBody(env: Env, L: Ledger) {
   const lessons = (await env.DB.prepare("SELECT lesson FROM lessons WHERE status = 'active' ORDER BY ts DESC LIMIT 10").all<{ lesson: string }>()).results.map((r) => r.lesson);
   let proposals: Proposal[] = [];
   if (hasGrok(env) && (research.length || portfolio.positions.length)) {
-    const r = await askAgent<{ proposals: Omit<Proposal, "id">[]; note: string }>(env, VELA, "Write trade proposals.", { research, portfolio, lessons: lessons, bch_usd: round(prices.bchPusd) });
+    const r = await askAgent<{ proposals: Omit<Proposal, "id">[]; note: string }>(env, VELA, "Write trade proposals.", { research, portfolio, scorecard: card, lessons, bch_usd: round(prices.bchPusd) }, { search: true });
     proposals = (r.proposals ?? []).map((p, i) => ({ ...p, id: `c${L.cycle}-p${i + 1}` }));
     if (r.note) await L.log("vela", "note", r.note);
   } else if (!hasGrok(env)) {
     proposals = signals.slice(0, 2).map((s) => ({ id: `c${L.cycle}-p${s.symbol}`, action: "buy", token_id: s.token_id, symbol: s.symbol, horizon: "short", size_pct: 2, target_pct: 25, stop_pct: 12, thesis: `Rule-based momentum entry: ${s.why}` }));
   }
+  for (const p of proposals) p.signal ??= signals.find((s) => s.token_id === p.token_id)?.signal ?? (held.some((h) => h.token_id === p.token_id) ? "exit-review" : "vela");
   for (const p of proposals) {
     const cases = p.bull_case ? ` Bull: ${p.bull_case} Bear: ${p.bear_case}` : "";
     await L.log("vela", "proposal", `${p.action.toUpperCase()} ${p.symbol} (${p.horizon}, ${p.size_pct}%): ${p.thesis}${cases}`, p);
@@ -144,8 +150,10 @@ async function cycleBody(env: Env, L: Ledger) {
     if (p.token_id === PUSD) { verdicts.set(p.id, { pass: false, allowed: 0, reasons: ["PUSD is the home asset"] }); continue; }
     if (!facts.has(p.token_id) && tokens.has(p.token_id)) facts.set(p.token_id, await tokenFacts(p.token_id, tokens.get(p.token_id)!));
     const heldPusd = held.filter((h) => h.token_id === p.token_id).reduce((s, h) => s + prices.value(h.token_id, h.amount), 0);
-    const b: Book = { totalPusd: book.total, byHorizonPusd: book.byHorizon, heldPusd, openShort: held.filter((h) => h.horizon === "short").length, dayChangePct };
-    const v = checkBuy(p, p.token_id === "bch" ? BCH_FACTS : facts.get(p.token_id), b, halted);
+    const b: Book = { totalPusd: book.total, byHorizonPusd: book.byHorizon, heldPusd, openShort: held.filter((h) => h.horizon === "short").length, dayChangePct, bchPusd: prices.bchPusd };
+    const scale = sizeScale(card, p.horizon);
+    if (scale < 1) await L.log("kade", "risk", `${p.horizon} trades are losing lately; ${p.symbol} size scaled to ${scale * 100}%.`);
+    const v = checkBuy({ ...p, size_pct: p.size_pct * scale }, p.token_id === "bch" ? BCH_FACTS : facts.get(p.token_id), b, halted);
     verdicts.set(p.id, { pass: v.pass, allowed: v.allowedPusd, reasons: v.reasons });
   }
   if (hasGrok(env)) {
@@ -171,7 +179,7 @@ async function cycleBody(env: Env, L: Ledger) {
   const candidates = proposals.filter((p) => verdicts.get(p.id)!.pass);
   let approved: Proposal[] = [];
   if (candidates.length && hasGrok(env)) {
-    const r = await askAgent<{ decisions: { proposal_id: string; approve: boolean; reason: string }[]; note: string }>(env, NOVA, "Approve or reject these risk-checked proposals.", { portfolio, lessons: lessons, recent_repo_update: repoUpdate, proposals: candidates.map((p) => ({ ...p, allowed_pusd: round(verdicts.get(p.id)!.allowed) })) });
+    const r = await askAgent<{ decisions: { proposal_id: string; approve: boolean; reason: string }[]; note: string }>(env, NOVA, "Approve or reject these risk-checked proposals.", { portfolio, scorecard: card, lessons, recent_repo_update: repoUpdate, proposals: candidates.map((p) => ({ ...p, allowed_pusd: round(verdicts.get(p.id)!.allowed) })) });
     for (const d of r.decisions ?? []) {
       const p = candidates.find((c) => c.id === d.proposal_id);
       if (!p) continue;
@@ -252,7 +260,7 @@ async function openPosition(L: Ledger, prices: Prices, p: Proposal, sizePusd: nu
   const whole = fill.amountOut / 10 ** prices.decimals(p.token_id);
   const positionId = await L.openPosition({
     token_id: p.token_id, symbol, horizon: p.horizon, amount: fill.amountOut, cost_pusd: sizePusd,
-    entry_price_pusd: sizePusd / whole, target_pct: p.target_pct, stop_pct: p.stop_pct, thesis: p.thesis,
+    entry_price_pusd: sizePusd / whole, target_pct: p.target_pct, stop_pct: p.stop_pct, signal: p.signal ?? null, thesis: p.thesis,
   });
   await L.recordTrade({ side: "buy", token_id: p.token_id, symbol, amount: fill.amountOut, pusd: sizePusd, price_pusd: sizePusd / whole, impact_pct: fill.impactPct, estimated: fill.estimated, position_id: positionId, reason: p.thesis });
   await L.log("rune", "fill", `PAPER BUY ${round(whole, 4)} ${symbol} for ${round(sizePusd)} PUSD (impact ${fill.impactPct.toFixed(2)}%${fill.estimated ? ", estimated" : ""}). Target +${p.target_pct}%, stop -${p.stop_pct}%.`, fill);
@@ -297,14 +305,16 @@ export async function runJournal(env: Env): Promise<void> {
   if (last?.ts && last.ts > Date.now() - 20 * 3600 * 1000) return;
   const closed = (await env.DB.prepare("SELECT symbol, horizon, cost_pusd, exit_pusd, close_reason FROM positions WHERE status = 'closed' AND closed_at >= ?").bind(since).all()).results;
   const vetoes = (await env.DB.prepare("SELECT message FROM events WHERE kind = 'risk-fail' AND ts >= ?").bind(since).all()).results;
-  const stats = { closed, vetoes: vetoes.length, value_now: await L.valueAt(0), value_24h_ago: await L.valueAt(24 * 3600 * 1000) };
+  const card = scorecard(await L.closedSince(30 * 86400 * 1000), 30);
+  const stats = { closed, scorecard_30d: card, vetoes: vetoes.length, value_now: await L.valueAt(0), value_24h_ago: await L.valueAt(24 * 3600 * 1000) };
   await L.status("zara", "writing the daily journal");
   let text: string;
   let lessons: string[] = [];
   if (hasGrok(env)) {
-    const r = await askAgent<{ journal: string; lessons: string[] }>(env, ZARA, "Write today's journal.", stats);
+    const r = await askAgent<{ journal: string; lessons: string[]; strategy_suggestion?: string }>(env, ZARA, "Write today's journal.", { ...stats, strategy: "see STRATEGY in your instructions" });
     text = r.journal;
     lessons = r.lessons ?? [];
+    if (r.strategy_suggestion) await L.log("zara", "suggestion", `Suggested strategy change for the owner: ${r.strategy_suggestion}`);
   } else {
     const wins = closed.filter((c) => Number(c.exit_pusd) > Number(c.cost_pusd)).length;
     text = `${closed.length} positions closed in 24h, ${wins} winners. ${vetoes.length} proposals failed risk checks. Portfolio ${round(stats.value_now ?? 0)} PUSD.`;

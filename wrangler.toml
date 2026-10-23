@@ -22,7 +22,7 @@ migrations_dir = "migrations"
 [vars]
 MODE = "paper"
 PAPER_START_PUSD = "1000"
-GROK_MODEL = "grok-4"
+GROK_MODEL = "grok-4.7"
 JOURNAL_HOUR_UTC = "21"
 
 # Secrets (set with `wrangler secret put`):

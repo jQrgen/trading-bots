@@ -13,6 +13,7 @@ export interface Position {
   entry_price_pusd: number;
   target_pct: number;
   stop_pct: number;
+  signal: string | null;
   thesis: string | null;
   opened_at: number;
   status: string;
@@ -54,8 +55,8 @@ export class Ledger {
 
   async openPosition(p: Omit<Position, "id" | "opened_at" | "status">): Promise<number> {
     const r = await this.db
-      .prepare("INSERT INTO positions (token_id, symbol, horizon, amount, cost_pusd, entry_price_pusd, target_pct, stop_pct, thesis, opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(p.token_id, p.symbol, p.horizon, p.amount, p.cost_pusd, p.entry_price_pusd, p.target_pct, p.stop_pct, p.thesis, Date.now())
+      .prepare("INSERT INTO positions (token_id, symbol, horizon, amount, cost_pusd, entry_price_pusd, target_pct, stop_pct, signal, thesis, opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(p.token_id, p.symbol, p.horizon, p.amount, p.cost_pusd, p.entry_price_pusd, p.target_pct, p.stop_pct, p.signal, p.thesis, Date.now())
       .run();
     return Number(r.meta.last_row_id);
   }
@@ -78,6 +79,25 @@ export class Ledger {
       .prepare("UPDATE positions SET status = 'closed', closed_at = ?, exit_pusd = ?, close_reason = ? WHERE id = ?")
       .bind(Date.now(), exitPusd, reason, id)
       .run();
+  }
+
+  /** Liquidity per token at the market tick closest to msAgo, for spotting growing or draining pools. */
+  async tvlAt(msAgo: number): Promise<Map<string, number>> {
+    const rows = await this.db
+      .prepare("SELECT token_id, tvl_bch FROM market_ticks WHERE ts = (SELECT MAX(ts) FROM market_ticks WHERE ts <= ?)")
+      .bind(Date.now() - msAgo)
+      .all<{ token_id: string; tvl_bch: number }>();
+    return new Map(rows.results.map((r) => [r.token_id, r.tvl_bch]));
+  }
+
+  /** Closed positions in the window, for the team's scorecard. */
+  async closedSince(ms: number) {
+    return (
+      await this.db
+        .prepare("SELECT horizon, signal, cost_pusd, exit_pusd FROM positions WHERE status = 'closed' AND closed_at >= ?")
+        .bind(Date.now() - ms)
+        .all<{ horizon: string; signal: string | null; cost_pusd: number; exit_pusd: number }>()
+    ).results;
   }
 
   async snapshot(totalPusd: number, bchPusd: number) {

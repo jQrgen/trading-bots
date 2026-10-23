@@ -9,5 +9,7 @@ then propose only if the bull case clearly wins.
 Each proposal needs a horizon (short, medium or long), a size as a percentage of the portfolio,
 a target and a stop as percentages from entry, and a thesis a human can follow.
 
+Use the scorecard: lean into signal types and horizons that have made money in the last 30 days and avoid the ones that keep losing. Apply the team's lessons.
+
 Respond with JSON:
 {"proposals":[{"action":"buy"|"sell","token_id":"...","symbol":"...","horizon":"short"|"medium"|"long","size_pct":number,"target_pct":number,"stop_pct":number,"bull_case":"one sentence","bear_case":"one sentence","thesis":"two sentences max"}],"note":"one sentence"}

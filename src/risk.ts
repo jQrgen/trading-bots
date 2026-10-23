@@ -12,6 +12,7 @@ export interface Proposal {
   thesis: string;
   bull_case?: string;
   bear_case?: string;
+  signal?: string;
 }
 
 export interface TokenFacts {
@@ -27,6 +28,7 @@ export interface Book {
   heldPusd: number; // existing position in this token
   openShort: number;
   dayChangePct: number;
+  bchPusd: number;
 }
 
 export interface RiskVerdict {
@@ -58,9 +60,11 @@ export function checkBuy(p: Proposal, facts: TokenFacts | undefined, book: Book,
   let allowed = (book.totalPusd * Math.max(0, p.size_pct)) / 100;
   const posCap = (book.totalPusd * RISK.maxPositionPct[h]) / 100 - book.heldPusd;
   const bookCap = (book.totalPusd * RISK.maxBookPct[h]) / 100 - book.byHorizonPusd[h];
+  const poolCap = (f.tvlBch * book.bchPusd * RISK.maxPoolSharePct) / 100 - book.heldPusd;
+  if (allowed > poolCap) reasons.push(`size cut to ${RISK.maxPoolSharePct}% of pool liquidity`);
   if (allowed > posCap) reasons.push(`size cut to position cap ${RISK.maxPositionPct[h]}%`);
   if (allowed > bookCap) reasons.push(`size cut to ${h} book cap ${RISK.maxBookPct[h]}%`);
-  allowed = Math.max(0, Math.min(allowed, posCap, bookCap));
+  allowed = Math.max(0, Math.min(allowed, posCap, bookCap, poolCap));
   if (allowed < RISK.minTradePusd) return { pass: false, allowedPusd: 0, reasons: [...reasons, `size ${allowed.toFixed(2)} PUSD below minimum`] };
   return { pass: true, allowedPusd: allowed, reasons };
 }

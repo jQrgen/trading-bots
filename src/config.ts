@@ -14,6 +14,7 @@ export const RISK = {
   maxBookPct: { short: 15, medium: 25, long: 60 } as Record<Horizon, number>,
   minTradePusd: 5,
   maxPriceImpactPct: 3,
+  maxPoolSharePct: 2, // a buy may use at most this share of the pool's BCH side, so we can get out again
   minTvlBch: { short: 5, medium: 25, long: 100 } as Record<Horizon, number>,
   minPoolAgeHours: { short: 6, medium: 72, long: 720 } as Record<Horizon, number>,
   maxOwnerSharePct: 90,
