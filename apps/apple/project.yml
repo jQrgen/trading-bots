@@ -33,8 +33,6 @@ packages:
 targetTemplates:
   DeskApp:
     type: application
-    sources:
-      - path: App
     dependencies:
       - package: DeskKit
     info:
@@ -48,8 +46,12 @@ targets:
   TradingDesk-iOS:
     templates: [DeskApp]
     platform: iOS
+    sources:
+      - path: App
+      - path: Resources/iOS
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
@@ -61,6 +63,12 @@ targets:
   TradingDesk-macOS:
     templates: [DeskApp]
     platform: macOS
+    sources:
+      - path: App
+      - path: Resources/macOS
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     entitlements:
       path: Config/TradingDesk-macOS.entitlements
       properties:
@@ -72,8 +80,12 @@ targets:
   TradingDesk-tvOS:
     templates: [DeskApp]
     platform: tvOS
+    sources:
+      - path: App
+      - path: Resources/tvOS
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
         TARGETED_DEVICE_FAMILY: "3"
     scheme:
       testTargets: []
