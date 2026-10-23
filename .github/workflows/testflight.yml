@@ -30,6 +30,10 @@ jobs:
             destination: generic/platform=iOS
           - platform: macOS
             destination: generic/platform=macOS
+            # Signing at archive time makes a Mac Development certificate on every fresh runner, and Apple
+            # refuses new ones once the limit is reached. Sign ad hoc instead, which keeps the sandbox
+            # entitlements in the archive, and let the export sign it for the App Store.
+            archive_flags: CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- PROVISIONING_PROFILE_SPECIFIER=
           - platform: tvOS
             destination: generic/platform=tvOS
             # Automatic signing would need a development profile, which needs a registered Apple TV.
