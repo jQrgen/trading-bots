@@ -290,6 +290,8 @@ async function state(env: Env) {
     updated_at: last?.ts ?? null,
     bch_pusd: marks?.bch_pusd ?? null,
     holdings: holdings.results.map((h) => ({ ...h, value_pusd: value(h.asset, h.amount) })),
+    // Owner's core basket target (display only; not enforced by risk).
+    basket_target: { PUSD: 0.7, RES: 0.3 },
     positions: positions.results.map((p) => {
       const v = value(String(p.token_id), Number(p.amount));
       return { ...p, value_pusd: v, pnl_pct: ((v - Number(p.cost_pusd)) / Number(p.cost_pusd)) * 100 };
