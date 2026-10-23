@@ -164,6 +164,8 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
 
   if (p === "/api/bot/files" || p.startsWith("/api/bot/files/")) return files(req, env, p.slice("/api/bot/files".length).replace(/^\//, ""), body);
 
+  if (p === "/api/bot/correct-position" && req.method === "POST") return correctPosition(env, body);
+
   if (req.method !== "POST") return json({ error: "not found" }, 404);
   if (p === "/api/bot/journal") {
     if (typeof body.journal !== "string") return json({ error: "need journal (string), lessons (string[]), optional strategy_suggestion" }, 400);
@@ -221,6 +223,30 @@ async function route(req: Request, env: Env, p: string): Promise<Response> {
   }
 
   return json({ error: "not found" }, 404);
+}
+
+/** Reprice a closed paper position that was filled from bad data. One correction per position. */
+async function correctPosition(env: Env, body: Record<string, unknown>) {
+  const id = Number(body.position_id);
+  const amount = Math.round(Number(body.amount));
+  const exit = Math.round(Number(body.exit_pusd) * 100) / 100;
+  const reason = typeof body.reason === "string" ? body.reason.slice(0, 2000) : "";
+  if (!(id > 0) || !(amount > 0) || !(exit >= 0) || !reason) return json({ error: "need position_id, amount, exit_pusd, reason" }, 400);
+  const pos = await env.DB.prepare("SELECT * FROM positions WHERE id = ? AND status = 'closed'").bind(id).first<{ token_id: string; symbol: string; amount: number; cost_pusd: number; exit_pusd: number }>();
+  if (!pos) return json({ error: "no closed position with that id" }, 404);
+  const key = `corrected_position_${id}`;
+  if (await env.DB.prepare("SELECT 1 FROM settings WHERE key = ?").bind(key).first()) return json({ error: "position already corrected" }, 409);
+  const delta = Math.round((exit - pos.exit_pusd) * 100) / 100;
+  const before = pos;
+  const L = new Ledger(env, await openCycle(env));
+  await env.DB.batch([
+    env.DB.prepare("UPDATE positions SET amount = ?, exit_pusd = ?, close_reason = close_reason || ' (corrected)' WHERE id = ?").bind(amount, exit, id),
+    env.DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").bind(key, JSON.stringify({ ts: Date.now(), before, amount, exit, delta })),
+  ]);
+  await L.adjust("pusd", "PUSD", delta * 100);
+  await L.recordTrade({ side: "correction", token_id: pos.token_id, symbol: pos.symbol, amount, pusd: delta, price_pusd: 0, impact_pct: 0, estimated: false, position_id: id, reason });
+  await L.log("desk", "correction", `Position ${id} ${pos.symbol} repriced: exit ${before.exit_pusd} -> ${exit} PUSD, cash ${delta >= 0 ? "+" : ""}${delta} PUSD. ${reason}`, { before, amount, exit, delta, evidence: body.evidence ?? null });
+  return json({ ok: true, position_id: id, delta_pusd: delta, exit_pusd: exit, pnl_pusd: Math.round((exit - pos.cost_pusd) * 100) / 100 });
 }
 
 async function openCycle(env: Env) {

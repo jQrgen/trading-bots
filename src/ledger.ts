@@ -76,7 +76,7 @@ export class Ledger {
       .run();
   }
 
-  async recordTrade(t: { side: "buy" | "sell" | "lp-in" | "lp-out"; token_id: string; symbol: string; amount: number; pusd: number; price_pusd: number; impact_pct: number; estimated: boolean; position_id: number | null; reason: string }) {
+  async recordTrade(t: { side: "buy" | "sell" | "lp-in" | "lp-out" | "correction"; token_id: string; symbol: string; amount: number; pusd: number; price_pusd: number; impact_pct: number; estimated: boolean; position_id: number | null; reason: string }) {
     await this.db
       .prepare("INSERT INTO trades (ts, cycle, mode, side, token_id, symbol, amount, pusd, price_pusd, impact_pct, estimated, position_id, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .bind(Date.now(), this.cycle, this.env.MODE, t.side, t.token_id, t.symbol, t.amount, t.pusd, t.price_pusd, t.impact_pct, t.estimated ? 1 : 0, t.position_id, t.reason)
