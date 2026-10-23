@@ -1,0 +1,134 @@
+{
+  "owner": "human",
+  "loop": [
+    "orin",
+    "vela",
+    "kade",
+    "nova",
+    "rune",
+    "zara"
+  ],
+  "agents": [
+    {
+      "id": "nova",
+      "name": "Nova",
+      "role": "Head trader / portfolio manager",
+      "horizons": [
+        "short",
+        "medium",
+        "long"
+      ],
+      "reports_to": [
+        "human"
+      ],
+      "veto": false,
+      "tools": [
+        "read_ledger",
+        "read_proposals",
+        "approve",
+        "reject",
+        "set_budgets",
+        "write_report"
+      ]
+    },
+    {
+      "id": "orin",
+      "name": "Orin",
+      "role": "Market scanner",
+      "horizons": [
+        "short"
+      ],
+      "reports_to": [
+        "vela"
+      ],
+      "veto": false,
+      "tools": [
+        "indexer_tokens",
+        "indexer_candles",
+        "indexer_volume",
+        "indexer_latest_tx",
+        "indexer_first_pool"
+      ]
+    },
+    {
+      "id": "vela",
+      "name": "Vela",
+      "role": "Research analyst",
+      "horizons": [
+        "medium",
+        "long"
+      ],
+      "reports_to": [
+        "nova"
+      ],
+      "veto": false,
+      "tools": [
+        "grok_search",
+        "bcmr_lookup",
+        "pool_history",
+        "holder_lookup",
+        "propose_trade"
+      ]
+    },
+    {
+      "id": "kade",
+      "name": "Kade",
+      "role": "Risk officer",
+      "horizons": [
+        "short",
+        "medium",
+        "long"
+      ],
+      "reports_to": [
+        "nova"
+      ],
+      "veto": true,
+      "tools": [
+        "risk_engine",
+        "quote_simulate",
+        "slippage_calc",
+        "rug_check"
+      ]
+    },
+    {
+      "id": "rune",
+      "name": "Rune",
+      "role": "Executor",
+      "horizons": [
+        "short"
+      ],
+      "reports_to": [
+        "nova"
+      ],
+      "veto": false,
+      "tools": [
+        "router_quote",
+        "router_build",
+        "tx_verify",
+        "signer_request",
+        "broadcast"
+      ]
+    },
+    {
+      "id": "zara",
+      "name": "Zara",
+      "role": "Journal, learning and alerts",
+      "horizons": [
+        "short",
+        "medium",
+        "long"
+      ],
+      "reports_to": [
+        "nova",
+        "human"
+      ],
+      "veto": false,
+      "tools": [
+        "read_ledger",
+        "stats",
+        "alert",
+        "write_lessons"
+      ]
+    }
+  ]
+}

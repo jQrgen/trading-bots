@@ -1,0 +1,33 @@
+name = "cauldron-trading-desk"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+# Seed knowledge (starter strategy, market notes, roles) is bundled as text. D1 is the source of truth at runtime.
+rules = [{ type = "Text", globs = ["**/*.md"], fallthrough = true }]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "trading-desk"
+database_id = "REPLACE_WITH_ID_FROM_wrangler_d1_create"
+migrations_dir = "migrations"
+
+[vars]
+MODE = "paper"
+PAPER_START_PUSD = "1000"
+GROK_MODEL = "grok-4.7"
+JOURNAL_HOUR_UTC = "21"
+# Who does the thinking: "grok-bot" (Grok Bot app calls /api/bot/*, no xAI key), "xai-api" (Worker calls the xAI API), "rules" (testing)
+BRAIN = "grok-bot"
+
+# Secrets (set with `wrangler secret put`):
+#   BOT_TOKEN    - token Grok Bot sends as Authorization: Bearer <BOT_TOKEN> to /api/bot/*
+#   ADMIN_TOKEN  - owner token for the kill switch, strategy edits and manual runs
+#   XAI_API_KEY  - optional, only used when BRAIN = "xai-api"

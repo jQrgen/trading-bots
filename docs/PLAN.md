@@ -1,6 +1,20 @@
 # Cauldron Trading Desk: Project Plan
 
-_Status: draft v0.1, 2026-10-23. Owner: Jørgen S. Notland._
+_Status: v0.2, 2026-10-23. Owner: Jørgen S. Notland._
+
+## Decisions so far (2026-10-23)
+
+- Home asset is **ParyonUSD (PUSD)**, category `2469acc5…a02544`.
+- Bots run **inside the Grok Bot app**: the owner pastes the repo into Grok Bot, it reads `GROK_BOT.md`, creates a 15-minute routine and calls the desk's `/api/bot/*` API with a `BOT_TOKEN`. No xAI or X API key is needed; Grok's own X and web search does the sentiment and research. (A fallback mode, `BRAIN = "xai-api"`, lets the Worker call the xAI API itself.)
+- The Worker cron (every 15 min) still marks prices, exits on stops and targets, and discovers new Cauldron tokens and launchpad sales on its own.
+- Desk, API and database (**D1**) all live on **Cloudflare**. D1 records every trade, position, lesson, snapshot, market tick and bot message.
+- **Fully automated trading.** The only human input is strategy, edited on the desk.
+- **GitHub is for code only; all data lives in D1**: strategy, risk limits, market notes, roles and team graph (versioned), trades, positions, proposals, every Grok prompt and reply, scorecards, lessons and market ticks. `seed/` holds starter defaults copied in on first run.
+- Deploys run entirely from GitHub Actions: create or find D1, migrate, deploy, sync secrets, announce, run a cycle.
+- The repo is written so a Grok bot can read `GROK_SETUP.md` and set everything up.
+- Market pitfalls the bots must know are in the "market" knowledge entry (seeded from `seed/MARKET.md`).
+- Launch on 2026-10-24 in **paper mode**. Live trading with keys comes only after the owner's explicit approval.
+- A native Apple app (iOS, macOS, tvOS) is built in a separate thread against the same API.
 
 ## 1. Goal
 
@@ -48,14 +62,14 @@ Key implication: because everything is quoted against BCH, every trade is effect
 Components:
 
 1. **Market data service**: polls the indexer (token list, prices, candles, volume, TVL, latest txs) and keeps a live router subscription for watched pairs. Writes snapshots to the event store.
-2. **Bot runtime**: runs each bot as a Grok (xAI API) agent with a role prompt, a skill set (tools) and a schedule. Bots never touch keys or the network directly; they call tools.
+2. **Bot runtime**: runs each bot as a role Grok Bot plays with a role prompt, a skill set (tools) and a schedule. Bots never touch keys or the network directly; they call tools.
 3. **Risk engine**: deterministic code, not an LLM. Every proposed order passes through it. It can only shrink or reject, never enlarge.
 4. **Execution service**: gets a quote, calls `tx.build`, **verifies the unsigned tx matches the quote** (amounts, outputs, fee, destination is our wallet), then sends it to the signer.
 5. **Signer**: separate process with the hot wallet key, a hard per-tx and per-day cap, and an allow-list of output scripts. Disabled entirely in paper mode.
 6. **Event store + ledger**: SQLite (Postgres later). Every bot message, decision, order, fill and balance snapshot is an append-only event. The ledger values everything in PUSD.
 7. **Trading desk web view**: read-only dashboard plus an owner-only kill switch.
 
-Tech choices (proposed): TypeScript end to end. Node service for core/bots, `libauth` or `mainnet-js` for BCH tx verification and signing, Next.js (or Vite + React) for the desk, SQLite, deployed on one small VPS or Fly.io. Grok via the xAI API.
+Tech choices: TypeScript, one Cloudflare Worker (cron + API + static desk), D1 (SQLite), Grok Bot calling the desk API. Later, for live mode: `libauth` for transaction verification and signing in an isolated signer.
 
 ## 4. The bot team
 
@@ -84,7 +98,18 @@ Reporting graph:
 
 The 24/7 loop: **Orin scans → Vela finds setups → Kade risk-checks → Nova approves → Rune executes → Zara logs, learns and alerts.**
 
-Each bot's skill and role live in the repo as files (`bots/<name>/ROLE.md`, `bots/<name>/skills/*.md`, `bots/<name>/tools.json`) so they're versioned and editable, and the graph lives in `graph/team.yaml`.
+Each bot's role, the shared rules, the market notes and the team graph live in D1 (`knowledge`, versioned in `knowledge_history`), so they're editable on the desk and inspectable by humans. Starter versions are in `seed/`.
+
+## 4b. Self-improvement loop
+
+The team learns from its own results without a human in the loop for trading:
+
+1. **Every trade is recorded** in D1 with its horizon and the signal type that triggered it (`trades`, `positions`).
+2. **Scorecard** (stored hourly in `scorecards`): each cycle, win rate and P&L for the last 30 days by horizon and by signal type are computed (`src/scorecard.ts`) and given to Orin, Vela and Nova. They lean into what works and demand stronger cases for what doesn't.
+3. **Adaptive sizing (code)**: a horizon that keeps losing (5+ trades, negative P&L) gets its bet size cut to 75%, 50% or 25% until it recovers. It can only shrink, never grow past the hard limits.
+4. **Lessons**: Zara's daily journal writes lessons that are fed straight back to Vela and Nova. The owner can reject a lesson.
+5. **Strategy suggestions**: Zara may suggest one concrete change to the strategy, backed by the scorecard. The owner decides and edits it on the desk.
+6. **Market memory**: `market_ticks` stores price and liquidity for the top tokens every cycle, so liquidity trends feed Orin's scan and the history can be used for backtests later.
 
 ## 5. Strategy book (initial)
 
@@ -119,7 +144,8 @@ Read-only for visitors, with an owner login for controls. Pages:
 - **Agent comms**: the six agents as cards with live status ("scanning 214 tokens", "waiting for Kade"), and a chat-style feed of their messages to each other.
 - **Activity log**: every scan, thesis, rug check, dev-wallet check, approval, veto, order and fill, with links to the tx on a block explorer.
 - **Positions**: open positions with entry, current price, target, stop, horizon, owner agent.
-- **Team graph**: the reporting structure rendered from `graph/team.yaml`.
+- **Team knowledge**: strategy, risk limits, market notes, roles and the team graph, with history and an owner editor.
+- **Proposals, scorecard and Grok calls**: every idea and its outcome, 30-day performance, and every prompt and reply.
 - **Journal**: Zara's daily reports, post-mortems and lessons.
 
 Updates stream live via Server-Sent Events.
@@ -127,14 +153,14 @@ Updates stream live via Server-Sent Events.
 ## 8. Repo layout (github.com/jQrgen/trading-bots, private)
 
 ```
-docs/            PLAN.md, ARCHITECTURE.md, RUNBOOK.md
-graph/           team.yaml (agents, edges, permissions)
-bots/<name>/     ROLE.md, skills/*.md, tools.json
-packages/core/   scheduler, bus, ledger, risk engine
-packages/market/ indexer + router clients
-packages/exec/   quote → build → verify → sign → broadcast
-packages/signer/ isolated signer (live mode only)
-apps/desk/       trading desk website
+docs/            PLAN.md
+seed/            starter knowledge copied into D1 on first run (strategy, market notes, roles, team.json)
+src/             Worker: loop, risk engine, ledger, knowledge, Grok client, Cauldron clients, API
+migrations/      D1 schema
+public/          trading desk website
+test/            unit tests and a mock indexer/Grok for local runs
+apps/apple/      SwiftUI app (iOS, macOS, tvOS), built in its own thread
+.github/         deploy workflow
 ```
 
 ## 9. Milestones
@@ -154,7 +180,7 @@ Launching tomorrow in paper mode gets the desk and team visible on schedule with
 1. **"Parity USD" = ParyonUSD (PUSD)?** That's the only BCH stablecoin matching the name, and it has the deepest Cauldron pool. Confirm.
 2. **Starting capital and caps**: how much goes in the hot wallet at go-live, and what max per trade / per day / max drawdown are you comfortable with?
 3. **Launch mode**: OK to launch tomorrow in paper mode and switch to live only after you approve?
-4. **Grok access**: do you have an xAI API key and a preferred model? (It will be stored as a secret, never in the repo.)
+4. **Grok access**: answered. The team runs in the Grok Bot app with a `BOT_TOKEN`; no xAI key.
 5. **Hosting**: where should the desk and bots run (your VPS, Fly.io, Vercel + a worker)? Public URL or password-protected?
 6. **Wallet**: generate a fresh dedicated wallet, or use riftenlabs-cli's built-in wallet?
 7. **Alerts**: Telegram bot for alerts and kill switch?
