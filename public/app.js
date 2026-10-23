@@ -504,7 +504,7 @@ async function loadWallet() {
 $("walletctl").addEventListener("click", async (e) => {
   const act = e.target.dataset?.act;
   if (!act) return;
-  const post = (path, body) => fetch(path, { method: "POST", headers: { authorization: "Bearer " + token.get(), "content-type": "application/json" }, body: JSON.stringify(body ?? {}) }).then(async (r) => ({ ok: r.ok, ...(await r.json().catch(() => ({}))) }));
+  const post = (path, body) => fetch(path, { method: "POST", headers: { authorization: "Bearer " + token.get(), "content-type": "application/json" }, body: JSON.stringify(body ?? {}) }).then(async (r) => ({ ok: r.ok, ...(await r.json().catch(() => ({}))) }), (e) => ({ ok: false, error: `Could not reach the desk: ${e.message}` }));
   let r;
   if (act === "halt") r = await post("/api/admin/halt", { halted: !deskState?.halted });
   if (act === "freeze") {
@@ -514,8 +514,15 @@ $("walletctl").addEventListener("click", async (e) => {
   }
   if (act === "live") {
     const typed = prompt("This switches the desk to REAL MONEY. First all BCH above a small fee reserve is swapped to PUSD, then the paper book is archived and the bots trade the wallet's funds within the live limits. Type GO LIVE to confirm.");
-    if (typed !== "GO LIVE") return;
+    if (typed === null) return;
+    // Phone keyboards capitalise and add spaces; accept any case, but say so when it doesn't match.
+    if (typed.trim().toUpperCase() !== "GO LIVE") return alert(`Not switched: you typed "${typed}". Type GO LIVE to confirm.`);
+    const btn = e.target.closest("button");
+    const label = btn?.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = "Converting BCH to PUSD…"; }
     r = await post("/api/admin/live", { confirm: "GO LIVE" });
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    if (r.ok) alert(r.converted ? `Live. Converted ${r.converted.bch} BCH to ${r.converted.pusd} PUSD (tx ${r.converted.txid}).` : "Live.");
   }
   if (act === "paper") {
     if (!confirm("Switch back to paper trading? Only possible with no live positions open. The wallet keeps its funds.")) return;
