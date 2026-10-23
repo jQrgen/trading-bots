@@ -10,6 +10,16 @@ Cauldron is a young, small DEX on Bitcoin Cash. It isn't Binance or Uniswap, and
 - **Prices are in satoshis.** Everything is priced against BCH. When BCH moves, every token's PUSD value moves with it, even if nothing happened to the token.
 - **Unconfirmed chains.** Trades on the same pools chain off each other before they confirm. If one transaction in the chain is dropped or conflicts with another, every trade after it is dropped too. Don't treat a fill as final until it's confirmed.
 
+## Coming soon: token-to-token pools
+Cauldron has direct token-to-token trading in the pipeline. Today every pool is token/BCH, so PUSD to a token is two
+swaps (about 0.8% in fees each way). When token/token pools launch:
+- **Cheaper routes.** A direct PUSD/token pool would cut fees and impact roughly in half for the desk's main trades.
+- **New arbitrage.** The same token priced in a direct pool and through BCH can drift apart; buying the cheap route and
+  selling the dear one is low-risk profit while liquidity is thin.
+- **New pools to provide.** PUSD/token liquidity would avoid BCH exposure on one side.
+Watch for it every cycle: Riften Labs and Cauldron announcements on X, router quotes that route without BCH, and new pool
+types in the indexer. Raise it as an alert the moment there is evidence, with the source. Until then, assume every route goes through BCH.
+
 ## Pitfalls specific to this market
 
 - **Thin liquidity.** Total TVL across all of Cauldron is about $1M, and daily volume is about $20k. Most tokens have only a few BCH of liquidity. A $50 trade can move the price several percent, so size to the pool, not to conviction.

@@ -3,6 +3,7 @@ import SHARED from "../seed/SHARED.md";
 import MARKET from "../seed/MARKET.md";
 import STRATEGY from "../seed/STRATEGY.md";
 import PLAYBOOK from "../seed/PLAYBOOK.md";
+import LIQUIDITY from "../seed/skills/liquidity.md";
 import NOVA from "../seed/roles/nova.md";
 import ORIN from "../seed/roles/orin.md";
 import VELA from "../seed/roles/vela.md";
@@ -17,6 +18,7 @@ export interface Doc { key: string; title: string; kind: string; format: "markdo
 export const SEED: Doc[] = [
   { key: "strategy", title: "Owner's strategy", kind: "strategy", format: "markdown", body: STRATEGY },
   { key: "risk-limits", title: "Hard risk limits", kind: "limits", format: "json", body: JSON.stringify(RISK_DEFAULTS, null, 2) },
+  { key: "skill:liquidity", title: "Skill: providing liquidity", kind: "skill", format: "markdown", body: LIQUIDITY },
   { key: "market", title: "Market notes: Cauldron DEX", kind: "market", format: "markdown", body: MARKET },
   { key: "shared", title: "Shared rules", kind: "rules", format: "markdown", body: SHARED },
   { key: "playbook", title: "Desk playbook (from HyperGrok, scaled to Cauldron)", kind: "rules", format: "markdown", body: PLAYBOOK },

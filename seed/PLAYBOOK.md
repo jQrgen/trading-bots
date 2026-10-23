@@ -30,10 +30,14 @@ A quiet cycle on a dead feed looks exactly like a calm market. That is the most 
 signal -> research -> proposal with bull and bear case -> risk engine -> Kade -> Nova -> fill -> review.
 Exits and size changes go through the same path. Nothing skips a stage because "the rules said so".
 
-## 5. Fewer, better trades
-- Cauldron punishes churn: every round trip pays about 1.6% before impact. One trade per cycle at most, a few a day.
-- Doing nothing is a decision, and usually the right one on a quiet day.
-- Take profit into strength; liquidity disappears on the way down.
+## 5. Trade as often as it pays
+- The owner wants profit, and day trading is fine when it makes money. There is no daily trade limit.
+- Every round trip still pays about 1.6% in fees plus impact, so a trade has to clear that before it earns anything.
+  The engine rejects targets under 3x the round-trip cost.
+- The scorecard shows results by holding time (under 1h, 1-24h, 1-7d, over 7d). If short holds keep losing after costs,
+  trade less often; if they pay, keep going. Let the numbers decide, not habit.
+- Doing nothing is still a valid decision. Take profit into strength; liquidity disappears on the way down.
+- Providing liquidity is another way to earn here: see the liquidity skill.
 
 ## 6. Honest scorekeeping
 - Grade **process** (clean / minor break / major break) separately from **outcome** (PUSD and R). A loss that followed

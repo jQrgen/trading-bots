@@ -22,13 +22,22 @@ export const RISK_DEFAULTS = {
   maxOpenShort: 5,
   maxStopPct: 50,
   dailyLossHaltPct: 10,
-  maxTradesPerCycle: 1, // Cauldron trades about $20k a day in total; churn pays ~1.6% a round trip
-  maxBuysPerDay: 4,
+  maxTradesPerCycle: 10, // safety valve against a runaway loop, not a trading limit (owner: trade as often as it pays)
+  maxBuysPerDay: 1000, // effectively off: the owner wants the bots to trade as often as the edge after costs allows
   // Size on what a stopped-out trade really costs, not the nominal stop (lesson from HyperGrok, scaled to Cauldron):
   // the stop can overshoot (the desk checks every 15 min and thin pools gap), the exit pays fees and price impact.
   maxRiskPerTradePct: { short: 1, medium: 2, long: 4 } as Record<Horizon, number>, // stressed loss, % of the book
   stopGapPct: 50, // assume a stop fills this much further away than set (12% stop -> 18% loss)
   minTargetToCostRatio: 3, // the target must be at least 3x the round-trip cost (fees + entry and exit impact)
+  // Liquidity providing (paper): our own micro-pool earning the 0.3% fee, exposed to impermanent loss and rugs.
+  maxLpPositionPct: 10, // one pool, % of the book
+  maxLpBookPct: 40, // all pools together
+  minLpTvlBch: 25,
+  minLpPoolAgeHours: 72,
+  maxLpPoolSharePct: 20, // our pool at most this share of the token's liquidity: we'd be the exit for everyone else
+  lpStopPct: 25, // withdraw if pool value plus fees falls this far below the deposit
+  lpDrainExitPct: 40, // withdraw if the token's liquidity drops this much in 24h (others are pulling out)
+  minLpFeeAprPct: 10, // estimated fee APR must at least pay for the setup costs and the risk
 };
 
 /** Fees for PUSD -> BCH -> token -> BCH -> PUSD: four hops at 0.3% pool + 0.1% router. */

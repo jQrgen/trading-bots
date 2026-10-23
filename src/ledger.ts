@@ -21,7 +21,7 @@ export interface Position {
 }
 
 export class Ledger {
-  constructor(private env: Env, public cycle: number) {}
+  constructor(readonly env: Env, public cycle: number) {}
   private get db() { return this.env.DB; }
 
   async log(agent: Agent, kind: string, message: string, data?: unknown) {
@@ -76,7 +76,7 @@ export class Ledger {
       .run();
   }
 
-  async recordTrade(t: { side: "buy" | "sell"; token_id: string; symbol: string; amount: number; pusd: number; price_pusd: number; impact_pct: number; estimated: boolean; position_id: number | null; reason: string }) {
+  async recordTrade(t: { side: "buy" | "sell" | "lp-in" | "lp-out"; token_id: string; symbol: string; amount: number; pusd: number; price_pusd: number; impact_pct: number; estimated: boolean; position_id: number | null; reason: string }) {
     await this.db
       .prepare("INSERT INTO trades (ts, cycle, mode, side, token_id, symbol, amount, pusd, price_pusd, impact_pct, estimated, position_id, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .bind(Date.now(), this.cycle, this.env.MODE, t.side, t.token_id, t.symbol, t.amount, t.pusd, t.price_pusd, t.impact_pct, t.estimated ? 1 : 0, t.position_id, t.reason)
@@ -109,9 +109,12 @@ export class Ledger {
   async closedSince(ms: number) {
     return (
       await this.db
-        .prepare("SELECT horizon, signal, cost_pusd, exit_pusd FROM positions WHERE status = 'closed' AND closed_at >= ?")
+        .prepare(
+          `SELECT horizon, signal, cost_pusd, exit_pusd, opened_at, closed_at FROM positions WHERE status = 'closed' AND closed_at >= ?1
+           UNION ALL SELECT 'liquidity', 'liquidity', deposit_pusd, exit_pusd, opened_at, closed_at FROM lp_positions WHERE status = 'closed' AND closed_at >= ?1`,
+        )
         .bind(Date.now() - ms)
-        .all<{ horizon: string; signal: string | null; cost_pusd: number; exit_pusd: number }>()
+        .all<{ horizon: string; signal: string | null; cost_pusd: number; exit_pusd: number; opened_at: number; closed_at: number }>()
     ).results;
   }
 

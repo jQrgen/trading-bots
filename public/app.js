@@ -28,6 +28,11 @@ async function loadState() {
   $("mode").textContent = s.mode === "live" ? "LIVE" : "PAPER";
   $("mode").className = "badge" + (s.mode === "live" ? " live" : "");
   $("halted").hidden = !s.halted;
+  const g = s.grok_bot ?? {};
+  const fail = g.last_auth_failure && (!g.last_seen || g.last_auth_failure.ts > g.last_seen) ? g.last_auth_failure : null;
+  $("grokstatus").textContent = g.last_seen ? `Grok Bot last connected ${ago(g.last_seen)}.` : "Grok Bot hasn't connected yet.";
+  $("grokstatus").title = fail ? `Last rejected call ${ago(fail.ts)}: ${fail.reason}` : "";
+  if (fail) $("grokstatus").textContent += ` Last rejected call ${ago(fail.ts)}: ${fail.reason}`;
   $("total").textContent = fmt(s.total_pusd);
   const pnl = s.total_pusd == null ? null : s.total_pusd - s.start_pusd;
   $("pnl").textContent = pnl == null ? "–" : signed(pnl);
@@ -115,7 +120,7 @@ async function loadTrades() {
   $("trades").innerHTML = t.length
     ? `<table><tr><th>When</th><th>Side</th><th>Token</th><th class="num">PUSD</th><th class="num">Impact</th></tr>${t
         .slice(0, 50)
-        .map((r) => `<tr title="${esc(r.reason)}"><td>${new Date(r.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td><td class="${r.side === "buy" ? "up" : "down"}">${r.side.toUpperCase()}${r.mode === "paper" ? " (paper)" : ""}</td><td>${esc(r.symbol)}</td><td class="num">${fmt(r.pusd)}</td><td class="num">${fmt(r.impact_pct)}%${r.estimated ? "*" : ""}</td></tr>`)
+        .map((r) => `<tr title="${esc(r.reason)}"><td>${new Date(r.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td><td class="${r.side === "buy" || r.side === "lp-in" ? "up" : "down"}">${{ "lp-in": "ADD LIQ", "lp-out": "WITHDRAW" }[r.side] ?? r.side.toUpperCase()}${r.mode === "paper" ? " (paper)" : ""}</td><td>${esc(r.symbol)}</td><td class="num">${fmt(r.pusd)}</td><td class="num">${fmt(r.impact_pct)}%${r.estimated ? "*" : ""}</td></tr>`)
         .join("")}</table>`
     : `<p class="empty">No trades yet.</p>`;
 }
@@ -199,6 +204,20 @@ async function loadFiles() {
   }
 }
 
+async function loadLiquidity() {
+  const rows = await get("/api/liquidity");
+  const open = rows.filter((x) => x.status === "open");
+  const closed = rows.filter((x) => x.status !== "open").slice(0, 5);
+  const row = (x) => {
+    const value = x.status === "open" ? x.value_pusd : x.exit_pusd;
+    const pnl = value - x.deposit_pusd;
+    return `<tr title="${esc([x.thesis, x.close_reason].filter(Boolean).join("\n"))}"><td>${esc(x.symbol)} <small class="hint">${x.status === "open" ? ago(x.opened_at) : "closed"}</small></td><td class="num">${fmt(x.deposit_pusd)}</td><td class="num">${fmt(x.fees_pusd)}</td><td class="num ${cls(x.il_pct)}">${fmt(x.il_pct, 1)}%</td><td class="num ${cls(pnl)}">${signed(pnl)}</td></tr>`;
+  };
+  $("liquidity").innerHTML = rows.length
+    ? `<table><tr><th>Pool</th><th class="num">Deposit</th><th class="num">Fees</th><th class="num">IL</th><th class="num">P&amp;L</th></tr>${[...open, ...closed].map(row).join("")}</table>`
+    : `<p class="empty">No liquidity positions yet. The team adds liquidity to pools whose estimated fees beat impermanent loss and rug risk.</p>`;
+}
+
 async function loadScorecard() {
   const c = await get("/api/scorecard");
   if (!c || !c.overall.trades) {
@@ -208,7 +227,7 @@ async function loadScorecard() {
   const table = (title, groups) => `<table><tr><th>${title}</th><th class="num">Trades</th><th class="num">Win rate</th><th class="num">Avg</th><th class="num">P&amp;L</th></tr>${Object.entries(groups)
     .map(([k, b]) => `<tr><td>${esc(k)}</td><td class="num">${b.trades}</td><td class="num">${fmt(b.win_rate * 100, 0)}%</td><td class="num ${cls(b.avg_pnl_pct)}">${signed(b.avg_pnl_pct, 1)}%</td><td class="num ${cls(b.pnl_pusd)}">${signed(b.pnl_pusd)}</td></tr>`)
     .join("")}</table>`;
-  $("scorecard").innerHTML = table("Horizon", { all: c.overall, ...c.by_horizon }) + `<div class="mt"></div>` + table("Signal", c.by_signal);
+  $("scorecard").innerHTML = table("Horizon", { all: c.overall, ...c.by_horizon }) + `<div class="mt"></div>` + table("Signal", c.by_signal) + (c.by_holding_time ? `<div class="mt"></div>` + table("Held for", c.by_holding_time) : "");
 }
 
 // Team knowledge: everything the bots read, with history. The owner can edit.
@@ -219,7 +238,7 @@ const token = {
   get: () => { try { return localStorage.getItem("desk-admin-token"); } catch { return null; } },
   set: (v) => { try { v ? localStorage.setItem("desk-admin-token", v) : localStorage.removeItem("desk-admin-token"); } catch {} },
 };
-const GROUPS = [["strategy", "Owner"], ["limits", "Owner"], ["market", "Market"], ["rules", "Team"], ["team", "Team"], ["role", "Roles"]];
+const GROUPS = [["strategy", "Owner"], ["limits", "Owner"], ["market", "Market"], ["rules", "Team"], ["skill", "Skills"], ["team", "Team"], ["role", "Roles"]];
 
 let kbSig = "";
 async function loadKnowledge(force = false) {
@@ -297,10 +316,29 @@ const showBotButton = () => ($("bottoken").hidden = !token.get());
 showBotButton();
 $("owner").addEventListener("click", () => setTimeout(showBotButton, 1500));
 $("bottoken").addEventListener("click", async () => {
-  if (!confirm("Create a new Grok Bot token? The previous token made here stops working.")) return;
   const r = await fetch("/api/admin/bot-token", { method: "POST", headers: { authorization: "Bearer " + token.get() } }).then((x) => x.json());
-  if (r.token) prompt("Give this token to Grok Bot. It is shown only once.", r.token);
-  else alert(r.error || "Failed");
+  if (!r.token) return alert(r.error || "Failed");
+  const link = `${location.origin}/grok?key=${r.token}`;
+  const text = `Read ${link} and set up the Cauldron trading team it describes. The access key is in the link. Run the trading cycle every 15 minutes and the journal every day at 21:00 UTC. Paper trading only.`;
+  // A real dialog with a copy button: iOS prompt() boxes make it easy to copy only part of the text.
+  const box = document.createElement("div");
+  box.className = "token-box";
+  box.innerHTML = `<div class="panel"><h2>Connect Grok Bot</h2><p>Paste this into Grok Bot. The key is in the link, so there is nothing else to set up. It stays the same across deploys.</p><textarea readonly rows="6"></textarea><div class="row"><button class="btn primary" data-act="copy">Copy</button><button class="btn" data-act="rotate">Make a new key</button><button class="btn" data-act="close">Close</button></div></div>`;
+  box.querySelector("textarea").value = text;
+  box.addEventListener("click", async (e) => {
+    const act = e.target.dataset?.act;
+    if (act === "copy") {
+      await navigator.clipboard.writeText(text).catch(() => box.querySelector("textarea").select());
+      e.target.textContent = "Copied";
+    }
+    if (act === "rotate" && confirm("Make a new key? Grok Bot will need the new link.")) {
+      box.remove();
+      await fetch("/api/admin/bot-token", { method: "POST", headers: { authorization: "Bearer " + token.get(), "content-type": "application/json" }, body: '{"rotate":true}' });
+      $("bottoken").click();
+    }
+    if (act === "close") box.remove();
+  });
+  document.body.append(box);
 });
 
 let callsSig = "";
@@ -330,7 +368,7 @@ $("range").addEventListener("click", (e) => {
 async function refresh() {
   try {
     await loadEvents();
-    await Promise.all([loadState(), loadChart(), loadTrades(), loadJournal(), loadProposals(), loadResearch(), loadSentiment(), loadFiles(), loadScorecard(), loadKnowledge(), loadCalls()]);
+    await Promise.all([loadState(), loadChart(), loadTrades(), loadJournal(), loadProposals(), loadLiquidity(), loadResearch(), loadSentiment(), loadFiles(), loadScorecard(), loadKnowledge(), loadCalls()]);
   } catch (err) {
     console.error(err);
   }

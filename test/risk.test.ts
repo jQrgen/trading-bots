@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { RISK_DEFAULTS } from "../src/config";
+import { checkProvide } from "../src/risk";
+import { feeIncomePusd, impermanentLossPct, poolValueSats, reservesAt } from "../src/lp";
 import { checkBuy, exitSignal, priceImpactPct, roundTripCostPct, stressedCap, stressedLoss, type Book, type Proposal, type TokenFacts } from "../src/risk";
 
 const proposal = (o: Partial<Proposal> = {}): Proposal => ({
@@ -92,7 +95,38 @@ describe("Cauldron cost-aware sizing", () => {
     expect(roundTripCostPct(50, 30000)).toBeCloseTo(1.6 + 100 / 300, 6);
   });
 
-  it("stops churning after the daily buy limit", () => {
-    expect(checkBuy(proposal(), facts(), book({ buysToday: 4 }), false).reasons.join()).toMatch(/buys in 24h/);
+  it("has no practical daily trade limit by default, but honours one the owner sets", () => {
+    expect(checkBuy(proposal(), facts(), book({ buysToday: 50 }), false).pass).toBe(true);
+    const tight = { ...RISK_DEFAULTS, maxBuysPerDay: 4 };
+    expect(checkBuy(proposal(), facts(), book({ buysToday: 4 }), false, tight).reasons.join()).toMatch(/buys in 24h/);
+  });
+});
+
+describe("liquidity providing", () => {
+  it("follows x*y=k and measures impermanent loss", () => {
+    const k = 1e8 * 1000; // 1 BCH and 1000 tokens at 100,000 sats per token
+    expect(reservesAt(k, 1e5).bchSats).toBeCloseTo(1e8, 0);
+    expect(poolValueSats(k, 4e5)).toBeCloseTo(4e8, 0); // price x4: value doubles, holding would be x2.5
+    expect(impermanentLossPct(1e5, 4e5)).toBeCloseTo(-20, 1);
+    expect(impermanentLossPct(1e5, 2e5)).toBeCloseTo(-5.72, 1);
+    expect(impermanentLossPct(1e5, 1e5)).toBeCloseTo(0, 6);
+  });
+
+  it("earns fees in proportion to its share of liquidity", () => {
+    const day = 86400000;
+    // our 1 BCH next to 9 BCH; 30 BCH volume over 30 days = 1 BCH a day; 0.3% fee; BCH = 300 PUSD
+    expect(feeIncomePusd(1e8, 9e8, 30e8, day, 300)).toBeCloseTo(0.1 * 1 * 0.003 * 300, 6);
+    expect(feeIncomePusd(1e8, 9e8, 0, day, 300)).toBe(0);
+  });
+
+  it("checks pools like trades and caps our share of the pool", () => {
+    const lp = { totalPusd: 1000, lpBookPusd: 0, heldInPoolPusd: 0, dayChangePct: 0, bchPusd: 300 };
+    const ok = checkProvide(proposal({ action: "provide", size_pct: 10, stop_pct: 20 }), facts({ feeAprPct: 30 }), lp, false);
+    expect(ok.pass).toBe(true);
+    expect(ok.allowedPusd).toBeLessThanOrEqual(100);
+    expect(checkProvide(proposal({ action: "provide", size_pct: 10 }), facts({ feeAprPct: 2 }), lp, false).reasons.join()).toMatch(/fee APR/);
+    expect(checkProvide(proposal({ action: "provide", size_pct: 10 }), facts({ tvlBch: 10 }), lp, false).pass).toBe(false);
+    const tiny = checkProvide(proposal({ action: "provide", size_pct: 10 }), facts({ tvlBch: 26 }), { ...lp, totalPusd: 100000 }, false);
+    expect(tiny.reasons.join()).toMatch(/of the token's liquidity/);
   });
 });
