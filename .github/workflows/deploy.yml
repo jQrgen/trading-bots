@@ -5,9 +5,10 @@ name: Deploy trading desk
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
-concurrency: deploy
+concurrency: deploy-${{ github.ref }}
 
 jobs:
   check:
@@ -23,7 +24,7 @@ jobs:
   deploy:
     needs: check
     runs-on: ubuntu-latest
-    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    if: ${{ github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true' }}
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
