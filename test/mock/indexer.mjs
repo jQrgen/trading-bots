@@ -54,6 +54,9 @@ http.createServer(async (req, res) => {
 // Fake Electrum (Fulcrum) on plain TCP for the live wallet: ELECTRUM_SERVERS="tcp://127.0.0.1:50001" in .dev.vars.
 // Every address holds 100 PUSD and 0.01 BCH.
 import net from "node:net";
+import { createHash } from "node:crypto";
+const sha = (b) => createHash("sha256").update(b).digest();
+const txidOf = (hex) => Buffer.from(sha(sha(Buffer.from(hex, "hex")))).reverse().toString("hex");
 net.createServer((sock) => {
   let buf = "";
   sock.on("data", (d) => {
@@ -67,7 +70,9 @@ net.createServer((sock) => {
             { tx_hash: "01".repeat(32), tx_pos: 0, height: 1, value: 1000, token_data: { category: PUSD, amount: "10000" } },
             { tx_hash: "02".repeat(32), tx_pos: 1, height: 1, value: 1000000 },
           ]
-        : req.method === "server.version" ? ["mock", "1.5"] : null;
+        : req.method === "server.version" ? ["mock", "1.5"]
+        : req.method === "blockchain.transaction.broadcast" ? txidOf(req.params[0])
+        : null;
       sock.write(JSON.stringify({ jsonrpc: "2.0", id: req.id, result }) + "\n");
     }
   });

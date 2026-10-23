@@ -113,12 +113,18 @@ export async function liveSwap(
       try {
         return await broadcastTx(hex);
       } catch (e) {
-        // The broadcast may have gone through even if its answer didn't reach us. Check before calling it failed.
         const txid = txidOf(decodeTx(hex));
+        // A node said no: the transaction itself is bad, so don't push it anywhere else.
+        if (/REJECTED/.test((e as Error).message)) throw e;
+        // Cauldron's broadcaster is down or unreachable (e.g. a 525). Fall back to the Electrum servers,
+        // which relay to the network directly. Fulcrum answers with the txid, or an error if the node refuses it.
+        const viaElectrum = await electrum(servers(env), "blockchain.transaction.broadcast", [hex]).catch((x: Error) => x);
+        if (typeof viaElectrum === "string") return viaElectrum;
+        // The first broadcast may still have gone through even though its answer didn't reach us. Check before calling it failed.
         await new Promise((r) => setTimeout(r, 3000));
         const seen = await electrum(servers(env), "blockchain.transaction.get", [txid]).catch(() => null);
         if (seen) return txid;
-        throw e;
+        throw new Error(`${(e as Error).message}; Electrum fallback: ${viaElectrum instanceof Error ? viaElectrum.message : JSON.stringify(viaElectrum)}`);
       }
     },
   };
