@@ -46,6 +46,8 @@ enum AppConfig {
     static let urlKey = "deskURL"
     static let intervalKey = "refreshSeconds"
     static let defaultInterval = 30.0
+    /// The live desk. Settings can point elsewhere (e.g. `wrangler dev`) or switch to demo data.
+    static let defaultURL = "https://cauldron-trading-desk.nordiccrypto.workers.dev"
 
     static var interval: Double {
         let v = UserDefaults.standard.double(forKey: intervalKey)
@@ -53,10 +55,10 @@ enum AppConfig {
     }
 
     static var savedURL: String {
-        UserDefaults.standard.string(forKey: urlKey) ?? ""
+        UserDefaults.standard.string(forKey: urlKey) ?? defaultURL
     }
 
-    /// An empty URL means demo data, so the app is useful before the Worker is deployed.
+    /// An empty URL means demo data.
     static func service(for urlString: String) -> any DeskService {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let client = try? DeskClient(urlString: trimmed) else { return DemoDesk() }

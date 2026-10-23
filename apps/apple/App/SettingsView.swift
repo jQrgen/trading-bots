@@ -3,7 +3,7 @@ import DeskKit
 
 struct SettingsView: View {
     @Environment(DeskStore.self) private var store
-    @AppStorage(AppConfig.urlKey) private var savedURL = ""
+    @AppStorage(AppConfig.urlKey) private var savedURL = AppConfig.defaultURL
     @AppStorage(AppConfig.intervalKey) private var interval = AppConfig.defaultInterval
     @State private var draft = ""
     @State private var check: String?
@@ -11,7 +11,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                TextField("https://cauldron-trading-desk.<you>.workers.dev", text: $draft)
+                TextField("Desk URL (empty for demo data)", text: $draft)
                     .autocorrectionDisabled()
                     #if os(iOS)
                     .keyboardType(.URL)
@@ -20,6 +20,12 @@ struct SettingsView: View {
                     .onSubmit(apply)
                 Button("Connect", action: apply)
                     .disabled(draft.trimmingCharacters(in: .whitespaces) == savedURL)
+                if savedURL != AppConfig.defaultURL {
+                    Button("Use the live desk") {
+                        draft = AppConfig.defaultURL
+                        apply()
+                    }
+                }
                 if !savedURL.isEmpty {
                     Button("Use demo data instead", role: .destructive) {
                         draft = ""
@@ -32,7 +38,7 @@ struct SettingsView: View {
             } header: {
                 Text("Desk")
             } footer: {
-                Text("The Cloudflare Worker that runs the bots. Leave empty to see demo data. The app only reads; it can't trade or halt the desk.")
+                Text("The Cloudflare Worker that runs the bots. The live desk is the default; leave the field empty to see demo data. The app only reads; it can't trade or halt the desk.")
             }
 
             Section("Refresh") {

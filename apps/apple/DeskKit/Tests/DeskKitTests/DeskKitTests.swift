@@ -111,6 +111,13 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.events.map(\.id), store.events.map(\.id).sorted(by: >))
         XCTAssertEqual(store.openPositions.count, 2)
         XCTAssertEqual(store.closedPositions.count, 2)
+        XCTAssertEqual(store.marketMood.map(\.subject), ["bch", "cauldron"])
+        XCTAssertEqual(store.notes(about: "furu").first?.verdict, "opportunity")
+        XCTAssertEqual(store.mood(about: "dogecash").count, 1)
+        XCTAssertFalse(store.tokens.isEmpty)
+        XCTAssertTrue(store.files.allSatisfy { $0.body == nil }, "the list call has no file text")
+        let file = try? await store.service.file(path: "notes/watchlist.md")
+        XCTAssertNotNil(file?.body)
 
         // A second refresh only asks for newer events and must not duplicate.
         let count = store.events.count
@@ -150,6 +157,12 @@ final class StoreTests: XCTestCase {
             func proposals(limit: Int) async throws -> [Proposal] { [] }
             func agentCalls(agent: String?, limit: Int) async throws -> [AgentCall] { [] }
             func agentCall(id: Int) async throws -> AgentCall { throw DeskError.http(status: 404, message: nil) }
+            func tokens() async throws -> [TokenSeen] { [] }
+            func research(token: String?) async throws -> [ResearchNote] { [] }
+            func sentiment(subject: String?) async throws -> [SentimentReading] { [] }
+            func launchpad() async throws -> [LaunchpadSale] { [] }
+            func files() async throws -> [BotFile] { [] }
+            func file(path: String) async throws -> BotFile { throw DeskError.http(status: 404, message: nil) }
         }
         let store = DeskStore(service: Down())
         await store.refresh()
@@ -222,5 +235,55 @@ final class KnowledgeTests: XCTestCase {
         let rows = JSONRows.rows(#"{"maxPositionPct":{"short":3,"long":20},"min_trade_pusd":5,"allow":true,"tags":["a","b"]}"#)
         XCTAssertEqual(rows.map(\.label), ["Allow", "Max position pct · Long", "Max position pct · Short", "Min trade pusd", "Tags"])
         XCTAssertEqual(rows.map(\.value), ["yes", "20", "3", "5", "a, b"])
+    }
+}
+
+final class DiscoveryTests: XCTestCase {
+    let decoder = DeskDecoder.make()
+
+    func testTokensAndLaunchpad() throws {
+        let t = #"[{"token_id":"abc","symbol":"ABC","name":null,"source":"launchpad","first_seen":1761220800000,"first_pool_ts":null,"last_tvl_bch":12.5,"research_status":"watch","last_research_at":1761224400000},{"symbol":"BAD"}]"#
+        let tokens = try decoder.decode(LossyArray<TokenSeen>.self, from: Data(t.utf8)).items
+        XCTAssertEqual(tokens.map(\.id), ["abc"])
+        XCTAssertEqual(tokens[0].lastTvlBch, 12.5)
+        XCTAssertEqual(tokens[0].researchStatus, "watch")
+        XCTAssertNil(tokens[0].name)
+
+        let l = #"[{"id":"sale1","offered_token_id":"abc","status":"open","data":"{\"cap_bch\":50}","first_seen":1761220800000,"updated_at":1761220800000}]"#
+        let sales = try decoder.decode(LossyArray<LaunchpadSale>.self, from: Data(l.utf8)).items
+        XCTAssertEqual(sales.first?.offeredTokenId, "abc")
+        XCTAssertEqual(JSONRows.rows(sales[0].data).first?.value, "50")
+    }
+
+    func testResearchAndSentiment() throws {
+        let r = #"[{"id":3,"ts":1761220800000,"cycle":7,"agent":"vela","token_id":"abc","symbol":"ABC","verdict":"opportunity","opportunity":"listing wave","note":"deep pool","sources":"[\"https://x.com/abc\",\"not a url\"]"}]"#
+        let notes = try decoder.decode(LossyArray<ResearchNote>.self, from: Data(r.utf8)).items
+        XCTAssertEqual(notes.first?.verdict, "opportunity")
+        XCTAssertEqual(notes.first?.sources, [URL(string: "https://x.com/abc")!])
+
+        let s = #"[{"id":1,"ts":1761220800000,"cycle":7,"subject":"bch","token_id":null,"symbol":null,"score":1.7,"mentions":120,"summary":"bullish","sources":null},{"id":2,"ts":1761220800000,"subject":"token","token_id":"abc","symbol":"ABC","score":-0.3,"summary":"meh"}]"#
+        let readings = try decoder.decode(LossyArray<SentimentReading>.self, from: Data(s.utf8)).items
+        XCTAssertEqual(readings.map(\.title), ["BCH market", "ABC"])
+        XCTAssertEqual(readings[0].score, 1, "clamped to +1")
+        XCTAssertEqual(readings[0].moodLabel, "Very positive")
+        XCTAssertEqual(readings[1].moodLabel, "Negative")
+        XCTAssertTrue(readings[1].sources.isEmpty)
+    }
+
+    func testFiles() throws {
+        let list = #"[{"path":"notes/watch list.md","content_type":"text/markdown","version":2,"updated_by":"vela","updated_at":1761220800000,"bytes":42}]"#
+        let files = try decoder.decode(LossyArray<BotFile>.self, from: Data(list.utf8)).items
+        XCTAssertEqual(files.first?.name, "watch list.md")
+        XCTAssertEqual(files.first?.bytes, 42)
+        XCTAssertNil(files.first?.body)
+
+        let one = #"{"path":"plan.json","body":"{}","content_type":"application/json","version":1,"updated_by":null,"updated_at":1761220800000}"#
+        let file = try decoder.decode(BotFile.self, from: Data(one.utf8))
+        XCTAssertTrue(file.isJSON)
+        XCTAssertEqual(file.body, "{}")
+        XCTAssertEqual(file.bytes, 2)
+
+        let client = try DeskClient(urlString: "desk.example.dev")
+        XCTAssertEqual(client.url("api/research", ["token": "abc"]).absoluteString, "https://desk.example.dev/api/research?token=abc")
     }
 }

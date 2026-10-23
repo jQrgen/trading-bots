@@ -200,4 +200,68 @@ public struct DemoDesk: DeskService {
         call.systemPrompt = "You are \(Team.displayName(call.agent)) on the Cauldron trading desk."
         return call
     }
+    public func tokens() async throws -> [TokenSeen] {
+        [
+            TokenSeen(tokenId: "furu", symbol: "FURU", name: "Furu", source: "cauldron", firstSeen: ago(60 * 24 * 41),
+                      lastTvlBch: 38.2, researchStatus: "traded", lastResearchAt: ago(5)),
+            TokenSeen(tokenId: "dogecash", symbol: "DCASH", name: "DogeCash", source: "cauldron", firstSeen: ago(60 * 24 * 9),
+                      lastTvlBch: 4.1, researchStatus: "avoid", lastResearchAt: ago(5)),
+            TokenSeen(tokenId: "lumen", symbol: "LUMEN", name: "Lumen", source: "cauldron", firstSeen: ago(180),
+                      lastTvlBch: 12.6, researchStatus: "watch", lastResearchAt: ago(35)),
+            TokenSeen(tokenId: "pebble", symbol: "PBL", name: "Pebble", source: "launchpad", firstSeen: ago(50), researchStatus: "new"),
+        ]
+    }
+
+    public func research(token: String?) async throws -> [ResearchNote] {
+        let all = [
+            ResearchNote(id: 23, ts: ago(5), cycle: 412, agent: "vela", tokenId: "furu", symbol: "FURU", verdict: "opportunity",
+                         opportunity: "Volume is rising with holder count; a medium-horizon long can ride the next listing wave.",
+                         note: "BCMR metadata verified. Developer ships weekly. Pool is 41 days old with 38 BCH TVL, deep enough for 100 PUSD.",
+                         sources: [URL(string: "https://x.com/furu_bch")!]),
+            ResearchNote(id: 22, ts: ago(5), cycle: 412, agent: "vela", tokenId: "dogecash", symbol: "DCASH", verdict: "avoid",
+                         opportunity: "Only a short squeeze; the pool is too thin to exit.",
+                         note: "Price +14% in 4h on a 4 BCH pool. Two wallets hold 60% of supply."),
+            ResearchNote(id: 21, ts: ago(35), cycle: 410, agent: "vela", tokenId: "lumen", symbol: "LUMEN", verdict: "watch",
+                         opportunity: "Could work once the pool passes 20 BCH.",
+                         note: "Three hours old. Team is public and the token has no minting baton, but liquidity is still building."),
+        ]
+        return all.filter { token == nil || $0.tokenId == token }
+    }
+
+    public func sentiment(subject: String?) async throws -> [SentimentReading] {
+        let all = [
+            SentimentReading(id: 9, ts: ago(6), cycle: 412, subject: "bch", score: 0.32, mentions: 340,
+                             summary: "Upbeat on the coming upgrade; some worry about exchange outflows."),
+            SentimentReading(id: 8, ts: ago(6), cycle: 412, subject: "cauldron", score: 0.55, mentions: 85,
+                             summary: "Users praise the new router and lower fees."),
+            SentimentReading(id: 7, ts: ago(6), cycle: 412, subject: "token", tokenId: "furu", symbol: "FURU", score: 0.6, mentions: 41,
+                             summary: "Holders excited about the roadmap; a few influencers picked it up today."),
+            SentimentReading(id: 6, ts: ago(6), cycle: 412, subject: "token", tokenId: "dogecash", symbol: "DCASH", score: -0.4, mentions: 22,
+                             summary: "Mostly pump calls and complaints about slippage."),
+        ]
+        return all.filter { subject == nil || $0.subject == subject }
+    }
+
+    public func launchpad() async throws -> [LaunchpadSale] {
+        [LaunchpadSale(id: "ido-7", offeredTokenId: "pebble", status: "upcoming",
+                       data: #"{"name":"Pebble","price_bch":0.0001,"cap_bch":50}"#, firstSeen: ago(50), updatedAt: ago(10))]
+    }
+
+    public func files() async throws -> [BotFile] {
+        demoFiles.map { var f = $0; f.body = nil; return f }
+    }
+
+    public func file(path: String) async throws -> BotFile {
+        guard let f = demoFiles.first(where: { $0.path == path }) else { throw DeskError.http(status: 404, message: "no such file") }
+        return f
+    }
+
+    private var demoFiles: [BotFile] {
+        let watchlist = "# Watchlist\n\n- **LUMEN**: revisit when the pool passes 20 BCH.\n- **PBL**: launchpad sale opens soon; check the team first."
+        let handover = "# Handover\n\nCycle 412: bought FURU. DCASH rejected on pool share. Next: re-score short horizon."
+        return [
+            BotFile(path: "notes/watchlist.md", version: 4, updatedBy: "vela", updatedAt: ago(35), body: watchlist),
+            BotFile(path: "notes/handover.md", version: 12, updatedBy: "nova", updatedAt: ago(4), body: handover),
+        ].map { var f = $0; f.bytes = f.body?.utf8.count; return f }
+    }
 }

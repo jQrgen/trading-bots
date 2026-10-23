@@ -20,6 +20,17 @@ public protocol DeskService: Sendable {
     func agentCalls(agent: String?, limit: Int) async throws -> [AgentCall]
     /// One call including its system prompt.
     func agentCall(id: Int) async throws -> AgentCall
+    /// New tokens on Cauldron and the launchpad, with how far research got.
+    func tokens() async throws -> [TokenSeen]
+    /// Research notes, for one token or (nil) all of them.
+    func research(token: String?) async throws -> [ResearchNote]
+    /// Sentiment readings for "token", "cauldron" or "bch", or (nil) all of them.
+    func sentiment(subject: String?) async throws -> [SentimentReading]
+    func launchpad() async throws -> [LaunchpadSale]
+    /// The agents' shared notes, without their text.
+    func files() async throws -> [BotFile]
+    /// One shared note including its text.
+    func file(path: String) async throws -> BotFile
 }
 
 public enum DeskError: LocalizedError, Equatable {
@@ -124,6 +135,23 @@ public struct DeskClient: DeskService {
         var query = ["limit": "\(limit)"]
         if let agent { query["agent"] = agent }
         return try await list("api/agent-calls", query)
+    }
+
+    public func tokens() async throws -> [TokenSeen] { try await list("api/tokens") }
+    public func launchpad() async throws -> [LaunchpadSale] { try await list("api/launchpad") }
+    public func files() async throws -> [BotFile] { try await list("api/files") }
+
+    public func file(path: String) async throws -> BotFile {
+        // The Worker decodes the rest of the URL, so slashes in the path can stay as they are.
+        try await get("api/files/" + path)
+    }
+
+    public func research(token: String?) async throws -> [ResearchNote] {
+        try await list("api/research", token.map { ["token": $0] } ?? [:])
+    }
+
+    public func sentiment(subject: String?) async throws -> [SentimentReading] {
+        try await list("api/sentiment", subject.map { ["subject": $0] } ?? [:])
     }
 
     func url(_ path: String, _ query: [String: String] = [:]) -> URL {

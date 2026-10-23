@@ -32,6 +32,24 @@ struct PlaybookView: View {
             } footer: {
                 Text("Strategy, risk limits and notes the agents read every cycle. Every change is versioned.")
             }
+            Section {
+                if store.files.isEmpty {
+                    Text("The agents haven't written any shared notes yet.").foregroundStyle(.secondary)
+                }
+                ForEach(store.files) { file in
+                    NavigationLink(value: file) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(file.path).font(.headline)
+                            Text("v\(file.version) · \(file.updatedBy.map { store.team.displayName($0) } ?? "–") · \(Format.relative(file.updatedAt))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                Text("Shared notes")
+            } footer: {
+                Text("Files the agents keep for each other in the database, such as watchlists and handovers.")
+            }
             Section("Daily reports") {
                 if store.journal.isEmpty {
                     Text("Zara writes the first journal entry tonight.").foregroundStyle(.secondary)
@@ -66,6 +84,7 @@ struct PlaybookView: View {
         .navigationTitle("Playbook")
         .navigationDestination(for: KnowledgeEntry.self) { KnowledgeDetailView(entry: $0) }
         .navigationDestination(for: JournalEntry.self) { JournalEntryView(entry: $0) }
+        .navigationDestination(for: BotFile.self) { BotFileView(file: $0) }
         .deskToolbar()
     }
 
