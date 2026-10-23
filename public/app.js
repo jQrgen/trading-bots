@@ -250,7 +250,7 @@ async function loadTrades() {
   $("trades").innerHTML = t.length
     ? `<table><tr><th>When</th><th>Side</th><th>Token</th><th class="num">PUSD</th><th class="num">Impact</th></tr>${t
         .slice(0, 50)
-        .map((r) => `<tr title="${esc(r.reason)}"><td>${new Date(r.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td><td class="${r.side === "buy" || r.side === "lp-in" ? "up" : "down"}">${{ "lp-in": "ADD LIQ", "lp-out": "WITHDRAW" }[r.side] ?? r.side.toUpperCase()}${r.mode === "paper" ? " (paper)" : ""}${r.txid ? ` <a href="https://blockchair.com/bitcoin-cash/transaction/${esc(r.txid)}" target="_blank" rel="noopener">tx</a>` : ""}</td><td>${esc(r.symbol)}</td><td class="num">${fmt(r.pusd)}</td><td class="num">${fmt(r.impact_pct)}%${r.estimated ? "*" : ""}</td></tr>`)
+        .map((r) => `<tr title="${esc(r.reason)}"><td>${new Date(r.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</td><td class="${r.side === "buy" || r.side === "lp-in" ? "up" : "down"}">${{ "lp-in": "ADD LIQ", "lp-out": "WITHDRAW" }[r.side] ?? r.side.toUpperCase()}${r.mode === "paper" ? " (paper)" : ""}${r.txid ? ` <a href="${explorer(r.txid)}" target="_blank" rel="noopener">tx</a>` : ""}</td><td>${esc(r.symbol)}</td><td class="num">${fmt(r.pusd)}</td><td class="num">${fmt(r.impact_pct)}%${r.estimated ? "*" : ""}</td></tr>`)
         .join("")}</table>`
     : `<p class="empty">No trades yet.</p>`;
 }
@@ -475,6 +475,9 @@ $("bottoken").addEventListener("click", async () => {
   document.body.append(box);
 });
 
+// Nordic Crypto's explorer; its search opens the transaction or address it finds.
+const explorer = (q) => `https://explorer.nordiccrypto.no/search/?q=${encodeURIComponent(q)}&chain=bch`;
+
 // Live wallet: address and balances for everyone; the switches for the owner only.
 let deskState = null;
 async function loadWallet() {
@@ -487,7 +490,7 @@ async function loadWallet() {
   } else {
     const bal = w.error ? `Balance unavailable: ${esc(w.error)}` : `<strong>${fmt(w.pusd)}</strong> PUSD · <strong>${fmt(w.bch_sats / 1e8, 5)}</strong> BCH${w.tokens?.length ? ` · ${w.tokens.length} other token${w.tokens.length > 1 ? "s" : ""}` : ""}`;
     el.innerHTML = `<p>${w.mode === "live" ? `<span class="badge live">LIVE</span> since ${new Date(w.live_since).toLocaleString()}` : `<span class="badge">NOT LIVE</span> The desk is paper trading; this wallet is untouched until the owner presses Go live.`}${w.frozen ? ' <span class="badge danger">FROZEN</span>' : ""}</p>
-      <p>Address: <code>${esc(w.address)}</code><br><small>Token-aware: <code>${esc(w.token_address)}</code>. Send PUSD and a little BCH (for fees) here. Check it matches your own wallet app first.</small></p>
+      <p>Address: <a href="${explorer(w.address)}" target="_blank" rel="noopener"><code>${esc(w.address)}</code></a><br><small>Token-aware: <code>${esc(w.token_address)}</code>. Send PUSD and a little BCH (for fees) here. Check it matches your own wallet app first.</small></p>
       <p>${bal}</p>`;
   }
   const ctl = $("walletctl");
