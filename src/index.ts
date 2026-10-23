@@ -103,11 +103,25 @@ export default {
       if (p === "/api/launchpad") return json((await env.DB.prepare("SELECT id, offered_token_id, status, data, first_seen, updated_at FROM launchpad ORDER BY first_seen DESC").all()).results);
       if (p === "/api/files") return json((await env.DB.prepare("SELECT path, content_type, version, updated_by, updated_at, length(body) AS bytes FROM bot_files ORDER BY updated_at DESC").all()).results);
       if (p.startsWith("/api/files/")) {
-        const f = await env.DB.prepare("SELECT * FROM bot_files WHERE path = ?").bind(decodeURIComponent(p.slice(11))).first();
+        const path = decodeURIComponent(p.slice(11));
+        if (url.searchParams.has("history"))
+          return json((await env.DB.prepare("SELECT version, body, updated_by, updated_at FROM bot_files_history WHERE path = ? ORDER BY version DESC LIMIT 50").bind(path).all()).results);
+        const f = await env.DB.prepare("SELECT * FROM bot_files WHERE path = ?").bind(path).first();
         return f ? json(f) : json({ error: "no such file" }, 404);
       }
       if (p === "/api/liquidity") return json((await env.DB.prepare("SELECT * FROM lp_positions ORDER BY status = 'open' DESC, opened_at DESC LIMIT 200").all()).results);
       if (p === "/api/reviews") return json((await env.DB.prepare("SELECT * FROM trade_reviews ORDER BY ts DESC LIMIT 200").all()).results);
+      if (p === "/api/markets")
+        return json((await env.DB.prepare("SELECT m.* FROM market_ticks m JOIN (SELECT token_id, MAX(ts) AS ts FROM market_ticks GROUP BY token_id) l ON l.token_id = m.token_id AND l.ts = m.ts ORDER BY m.tvl_bch DESC LIMIT 300").all()).results);
+      if (p === "/api/ticks") {
+        const days = Math.min(Number(url.searchParams.get("days") ?? 7), 90);
+        return json((await env.DB.prepare("SELECT ts, price_pusd, tvl_bch, chg_24h_pct, volume_sats FROM market_ticks WHERE token_id = ? AND ts >= ? ORDER BY ts").bind(url.searchParams.get("token") ?? "", Date.now() - days * 86400000).all()).results);
+      }
+      // The last briefing Grok Bot read: exactly what the team saw at the start of its latest cycle.
+      if (p === "/api/briefing") {
+        const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'last_briefing'").first<{ value: string }>();
+        return row ? new Response(row.value, { headers: { "content-type": "application/json", "cache-control": "no-store" } }) : json(null);
+      }
       if (p === "/api/lessons") return json((await env.DB.prepare("SELECT * FROM lessons ORDER BY id DESC LIMIT 200").all()).results);
       if (p.startsWith("/api/")) return json({ error: "not found" }, 404);
       return env.ASSETS.fetch(req);

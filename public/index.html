@@ -28,6 +28,12 @@
     </section>
 
     <section class="panel span-2">
+      <div class="row"><h2>Team graph</h2><span class="hint">Who reports to whom, from the team file in the database. Arrows point to the boss.</span></div>
+      <div id="teamgraph" class="graph"></div>
+      <div id="teamloop" class="hint"></div>
+    </section>
+
+    <section class="panel span-2">
       <div class="row"><h2>Balance</h2>
         <div class="tabs" id="range">
           <button data-days="1">1D</button><button data-days="7" class="on">7D</button><button data-days="30">30D</button><button data-days="365">All</button>
@@ -41,6 +47,8 @@
       <div id="positions"></div>
       <h2 class="mt">Holdings</h2>
       <div id="holdings"></div>
+      <h2 class="mt">Closed positions</h2>
+      <div id="closedpos"></div>
     </section>
 
     <section class="panel">
@@ -83,6 +91,8 @@
     <section class="panel">
       <h2>Scorecard (30 days)</h2>
       <div id="scorecard"></div>
+      <h2 class="mt">Scorecard P&amp;L over time</h2>
+      <div id="scorechart" class="chart small"></div>
     </section>
 
     <section class="panel">
@@ -90,6 +100,14 @@
       <div id="journal"></div>
       <div id="reviews"></div>
       <ul id="lessons" class="lessons"></ul>
+    </section>
+
+    <section class="panel span-2">
+      <div class="row"><h2>Cauldron market</h2>
+        <div class="tabs" id="mrange"><button data-days="1">1D</button><button data-days="7" class="on">7D</button><button data-days="30">30D</button></div>
+      </div>
+      <div id="mchart" class="chart"></div>
+      <div id="markets" class="scroll"></div>
     </section>
 
     <section class="panel span-2" id="knowledge-panel">
@@ -103,6 +121,39 @@
     <section class="panel span-2">
       <div class="row"><h2>Team files</h2><span class="hint">The bots' shared memory, stored in the database.</span></div>
       <div id="files" class="calls"></div>
+    </section>
+
+    <section class="panel span-2">
+      <div class="row"><h2>Latest briefing</h2><span class="hint">Exactly what Grok Bot read at the start of its latest cycle.</span></div>
+      <div id="briefing" class="calls"></div>
+    </section>
+
+    <section class="panel span-2">
+      <div class="row"><h2>All data</h2>
+        <select id="dataset">
+          <option value="/api/trades">Trades</option>
+          <option value="/api/positions">Positions</option>
+          <option value="/api/liquidity">Liquidity positions</option>
+          <option value="/api/proposals?limit=500">Proposals</option>
+          <option value="/api/research">Research notes</option>
+          <option value="/api/sentiment">X sentiment</option>
+          <option value="/api/tokens">Tokens seen</option>
+          <option value="/api/launchpad">Launchpad</option>
+          <option value="/api/markets">Market (latest prices)</option>
+          <option value="/api/reviews">Trade reviews</option>
+          <option value="/api/lessons">Lessons</option>
+          <option value="/api/journal">Journal</option>
+          <option value="/api/events?limit=500">Activity log</option>
+          <option value="/api/scorecards?days=365">Scorecards</option>
+          <option value="/api/snapshots?days=365">Balance snapshots</option>
+          <option value="/api/team">Team</option>
+          <option value="/api/knowledge">Knowledge</option>
+          <option value="/api/files">Team files</option>
+          <option value="/api/risk-limits">Risk limits</option>
+          <option value="/api/agent-calls?limit=200">Grok calls</option>
+        </select>
+      </div>
+      <div id="data" class="scroll tall"></div>
     </section>
 
     <section class="panel span-2">

@@ -87,32 +87,151 @@ function renderLog() {
     : `<li class="empty">Nothing yet. The team runs every 15 minutes.</li>`;
 }
 
-async function loadChart() {
-  const pts = await get(`/api/snapshots?days=${days}`);
-  const el = $("chart");
+// A small line chart for any series: [{ts, <key>}].
+function lineChart(el, pts, key, label, empty) {
+  pts = pts.filter((p) => p[key] != null && isFinite(p[key]));
   if (pts.length < 2) {
-    el.innerHTML = `<p class="empty">The chart fills in after a couple of cycles.</p>`;
+    el.innerHTML = `<p class="empty">${empty}</p>`;
     return;
   }
   const W = el.clientWidth || 800, H = el.clientHeight || 220, P = 36;
-  const xs = pts.map((p) => p.ts), ys = pts.map((p) => p.total_pusd);
+  const xs = pts.map((p) => p.ts), ys = pts.map((p) => p[key]);
   const x0 = Math.min(...xs), x1 = Math.max(...xs);
   let y0 = Math.min(...ys), y1 = Math.max(...ys);
-  if (y1 - y0 < 1e-6) { y0 -= 1; y1 += 1; }
-  const X = (t) => P + ((t - x0) / (x1 - x0)) * (W - P - 8);
+  if (y1 - y0 < 1e-12) { y0 -= Math.abs(y0) * 0.01 || 1; y1 += Math.abs(y1) * 0.01 || 1; }
+  const d = Math.abs(y1) < 0.01 ? 8 : Math.abs(y1) < 10 ? 4 : 2;
+  const X = (t) => P + ((t - x0) / (x1 - x0 || 1)) * (W - P - 8);
   const Y = (v) => 8 + (1 - (v - y0) / (y1 - y0)) * (H - 32);
-  const line = pts.map((p, i) => `${i ? "L" : "M"}${X(p.ts).toFixed(1)},${Y(p.total_pusd).toFixed(1)}`).join("");
-  const up = ys[ys.length - 1] >= ys[0];
-  const color = up ? "var(--up)" : "var(--down)";
-  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Portfolio value in PUSD">
-    <text x="4" y="${Y(y1) + 4}" fill="var(--muted)" font-size="11">${fmt(y1)}</text>
-    <text x="4" y="${Y(y0) + 4}" fill="var(--muted)" font-size="11">${fmt(y0)}</text>
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${X(p.ts).toFixed(1)},${Y(p[key]).toFixed(1)}`).join("");
+  const color = ys[ys.length - 1] >= ys[0] ? "var(--up)" : "var(--down)";
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">
+    <text x="4" y="${Y(y1) + 4}" fill="var(--muted)" font-size="11">${fmt(y1, d)}</text>
+    <text x="4" y="${Y(y0) + 4}" fill="var(--muted)" font-size="11">${fmt(y0, d)}</text>
     <line x1="${P}" x2="${W - 8}" y1="${Y(y0)}" y2="${Y(y0)}" stroke="var(--line)"/>
     <path d="${line}L${X(x1)},${Y(y0)}L${X(x0)},${Y(y0)}Z" fill="${color}" opacity=".08"/>
     <path d="${line}" fill="none" stroke="${color}" stroke-width="2"/>
-    <text x="${P}" y="${H - 6}" fill="var(--muted)" font-size="11">${new Date(x0).toLocaleString()}</text>
+    <text x="${P}" y="${H - 6}" fill="var(--muted)" font-size="11">${esc(label)} · ${new Date(x0).toLocaleString()}</text>
     <text x="${W - 8}" y="${H - 6}" fill="var(--muted)" font-size="11" text-anchor="end">${ago(x1)}</text>
   </svg>`;
+}
+
+async function loadChart() {
+  lineChart($("chart"), await get(`/api/snapshots?days=${days}`), "total_pusd", "Portfolio value (PUSD)", "The chart fills in after a couple of cycles.");
+}
+
+// Team graph: the owner on top, each agent below the one it reports to.
+async function loadTeam() {
+  const t = await get("/api/team");
+  const agents = t.agents ?? [];
+  const sig = JSON.stringify(agents.map((a) => [a.id, a.reports_to, a.status]));
+  if ($("teamgraph").dataset.sig === sig) return;
+  $("teamgraph").dataset.sig = sig;
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  const owner = t.owner ?? "human";
+  const depth = new Map([[owner, 0]]);
+  const depthOf = (id, seen = new Set()) => {
+    if (depth.has(id)) return depth.get(id);
+    if (seen.has(id) || !byId.has(id)) return 1;
+    seen.add(id);
+    const bosses = byId.get(id).reports_to ?? [];
+    const d = 1 + (bosses.length ? Math.min(...bosses.map((b) => depthOf(b, seen))) : 0);
+    depth.set(id, d);
+    return d;
+  };
+  agents.forEach((a) => depthOf(a.id));
+  const layers = [];
+  for (const [id, d] of depth) (layers[d] ??= []).push(id);
+  const W = 960, NW = 150, NH = 58, GAP = 34;
+  const H = layers.length * (NH + GAP) + 10;
+  const pos = new Map();
+  layers.forEach((ids, d) => ids.forEach((id, i) => pos.set(id, { x: ((i + 0.5) * W) / ids.length, y: 10 + d * (NH + GAP) })));
+  const edges = agents.flatMap((a) => (a.reports_to ?? []).filter((b) => pos.has(b)).map((b) => {
+    const from = pos.get(a.id), to = pos.get(b);
+    return `<path class="edge" marker-end="url(#arrow)" d="M${from.x},${from.y} C${from.x},${from.y - GAP} ${to.x},${to.y + NH + GAP} ${to.x},${to.y + NH + 2}"/>`;
+  }));
+  const node = (id) => {
+    const p = pos.get(id), a = byId.get(id);
+    const name = a ? a.name ?? id : "Owner";
+    const sub = a ? a.role : "You: sets strategy";
+    const st = a?.status ? a.status.slice(0, 26) : a ? "" : "";
+    return `<g class="node" style="--c: var(--${esc(id)}, var(--accent))" transform="translate(${p.x - NW / 2},${p.y})">
+      <title>${esc([name, sub, a?.status, a?.tools && "Tools: " + a.tools.join(", "), a?.horizons && "Horizons: " + a.horizons.join(", "), a?.veto ? "Has veto" : ""].filter(Boolean).join("\n"))}</title>
+      <rect width="${NW}" height="${NH}" rx="8"/>
+      <text class="name" x="10" y="18">${esc(name.toUpperCase())}${a?.veto ? " · veto" : ""}</text>
+      <text class="sub" x="10" y="34">${esc(sub.slice(0, 24))}</text>
+      <text class="sub" x="10" y="49">${esc(st)}</text>
+    </g>`;
+  };
+  $("teamgraph").innerHTML = agents.length
+    ? `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Team graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="var(--muted)"/></marker></defs>${edges.join("")}${[...pos.keys()].map(node).join("")}</svg>`
+    : `<p class="empty">No team file yet.</p>`;
+  $("teamloop").textContent = t.loop?.length ? `Each cycle runs in this order: ${t.loop.join(" → ")}.` : "";
+}
+
+let mdays = 7;
+let mtoken = null;
+async function loadMarkets() {
+  const rows = await get("/api/markets");
+  if (!mtoken && rows.length) mtoken = (rows.find((r) => r.symbol !== "PUSD") ?? rows[0]).token_id;
+  $("markets").innerHTML = rows.length
+    ? `<table><tr><th>Token</th><th class="num">Price (PUSD)</th><th class="num">24h</th><th class="num">TVL (BCH)</th><th>Updated</th></tr>${rows
+        .map((r) => `<tr class="pick${r.token_id === mtoken ? " on" : ""}" data-token="${esc(r.token_id)}" data-symbol="${esc(r.symbol)}"><td>${esc(r.symbol)}</td><td class="num">${fmt(r.price_pusd, r.price_pusd < 0.01 ? 8 : 4)}</td><td class="num ${cls(r.chg_24h_pct)}">${signed(r.chg_24h_pct, 1)}%</td><td class="num">${fmt(r.tvl_bch, 1)}</td><td>${ago(r.ts)}</td></tr>`)
+        .join("")}</table>`
+    : `<p class="empty">Market prices appear after the first cycle.</p>`;
+  await loadMarketChart(rows.find((r) => r.token_id === mtoken)?.symbol);
+}
+async function loadMarketChart(symbol) {
+  if (!mtoken) { $("mchart").innerHTML = ""; return; }
+  lineChart($("mchart"), await get(`/api/ticks?token=${encodeURIComponent(mtoken)}&days=${mdays}`), "price_pusd", `${symbol ?? "Token"} price (PUSD)`, "Not enough price history for this token yet.");
+}
+
+async function loadClosedPositions() {
+  const rows = (await get("/api/positions")).filter((p) => p.status !== "open").slice(0, 15);
+  $("closedpos").innerHTML = rows.length
+    ? `<table><tr><th>Token</th><th>Held</th><th class="num">Cost</th><th class="num">Exit</th><th class="num">P&amp;L</th><th>Why</th></tr>${rows
+        .map((p) => {
+          const pnl = (p.exit_pusd ?? 0) - p.cost_pusd;
+          const held = p.closed_at ? Math.round((p.closed_at - p.opened_at) / 60000) : null;
+          return `<tr title="${esc(p.thesis)}"><td>${esc(p.symbol)} <small class="hint">${esc(p.horizon)}</small></td><td>${held == null ? "–" : held < 120 ? held + "m" : Math.round(held / 60) + "h"}</td><td class="num">${fmt(p.cost_pusd)}</td><td class="num">${fmt(p.exit_pusd)}</td><td class="num ${cls(pnl)}">${signed(pnl)}</td><td>${esc(p.close_reason ?? "")}</td></tr>`;
+        })
+        .join("")}</table>`
+    : `<p class="empty">No closed positions yet.</p>`;
+}
+
+async function loadScoreChart() {
+  const rows = await get("/api/scorecards?days=90");
+  lineChart($("scorechart"), rows.map((r) => ({ ts: r.ts, pnl: r.overall?.pnl_pusd })), "pnl", "30-day P&L (PUSD)", "Fills in as daily scorecards build up.");
+}
+
+let briefSig = "";
+async function loadBriefing() {
+  const b = await get("/api/briefing");
+  const sig = b ? String(b.cycle) : "";
+  if (sig === briefSig && briefSig) return;
+  briefSig = sig;
+  if (!b) { $("briefing").innerHTML = `<p class="empty">Grok Bot hasn't read a briefing since this view was added. It shows up after its next cycle.</p>`; return; }
+  const parts = Object.entries(b).filter(([, v]) => v != null && typeof v === "object");
+  const head = Object.entries(b).filter(([, v]) => v == null || typeof v !== "object").map(([k, v]) => `${k}: ${v}`).join(" · ");
+  $("briefing").innerHTML = `<p class="hint">${esc(head)}</p>` + parts.map(([k, v]) => `<details><summary><code>${esc(k)}</code> <small class="hint">${Array.isArray(v) ? v.length + " items" : Object.keys(v).length + " fields"}</small></summary><pre>${esc(JSON.stringify(v, null, 2))}</pre></details>`).join("");
+}
+
+// All data: any dataset as a full table, every column.
+const isTime = (k) => /(^ts$|_at$|^first_seen$|^last_seen$)/.test(k);
+function cell(k, v) {
+  if (v == null) return "";
+  if (typeof v === "number" && isTime(k) && v > 1e12) return esc(new Date(v).toLocaleString());
+  if (typeof v === "object") v = JSON.stringify(v);
+  const t = String(v);
+  return t.length > 80 ? `<details><summary>${esc(t.slice(0, 80))}…</summary>${esc(t)}</details>` : esc(t);
+}
+async function loadData() {
+  let rows = await get($("dataset").value);
+  if (rows && !Array.isArray(rows)) rows = rows.agents ?? [rows];
+  rows = rows ?? [];
+  const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+  $("data").innerHTML = rows.length
+    ? `<p class="hint">${rows.length} rows</p><table><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr>${rows.map((r) => `<tr>${cols.map((c) => `<td>${cell(c, r[c])}</td>`).join("")}</tr>`).join("")}</table>`
+    : `<p class="empty">No rows yet.</p>`;
 }
 
 async function loadTrades() {
@@ -188,7 +307,7 @@ async function loadFiles() {
   $("files").dataset.sig = sig;
   $("files").innerHTML = rows.length
     ? rows
-        .map((f) => `<details class="call" data-path="${esc(f.path)}"${open.has(f.path) ? " open" : ""}><summary><code>${esc(f.path)}</code> <small class="hint">v${f.version} · ${esc(f.updated_by ?? "")} · ${ago(f.updated_at)} · ${fmt(f.bytes / 1024, 1)} KB</small></summary><pre class="body" data-load="${esc(f.path)}">Loading…</pre></details>`)
+        .map((f) => `<details class="call" data-path="${esc(f.path)}"${open.has(f.path) ? " open" : ""}><summary><code>${esc(f.path)}</code> <small class="hint">v${f.version} · ${esc(f.updated_by ?? "")} · ${ago(f.updated_at)} · ${fmt(f.bytes / 1024, 1)} KB</small></summary><pre class="body" data-load="${esc(f.path)}">Loading…</pre>${f.version > 1 ? `<button class="btn mt" data-hist="${esc(f.path)}">History</button><div class="hist"></div>` : ""}</details>`)
         .join("")
     : `<p class="empty">No files yet. The bots write their watchlists, plans and notes here.</p>`;
   for (const d of document.querySelectorAll("#files details")) {
@@ -200,6 +319,10 @@ async function loadFiles() {
       pre.dataset.done = "1";
     };
     d.addEventListener("toggle", () => d.open && load());
+    d.querySelector("[data-hist]")?.addEventListener("click", async (e) => {
+      const h = await get("/api/files/" + encodeURIComponent(d.dataset.path).replace(/%2F/g, "/") + "?history=1");
+      e.target.nextElementSibling.innerHTML = h.map((x) => `<details><summary>Version ${x.version} · ${esc(x.updated_by ?? "")} · ${new Date(x.updated_at).toLocaleString()}</summary><pre>${esc(x.body)}</pre></details>`).join("") || `<p class="empty">No earlier versions.</p>`;
+    });
     if (d.open) load();
   }
 }
@@ -357,6 +480,21 @@ async function loadCalls() {
 }
 
 $("filter").addEventListener("change", renderLog);
+$("dataset").addEventListener("change", loadData);
+$("markets").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-token]");
+  if (!tr) return;
+  mtoken = tr.dataset.token;
+  document.querySelectorAll("#markets tr").forEach((x) => x.classList.toggle("on", x === tr));
+  loadMarketChart(tr.dataset.symbol);
+});
+$("mrange").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  mdays = Number(b.dataset.days);
+  document.querySelectorAll("#mrange button").forEach((x) => x.classList.toggle("on", x === b));
+  loadMarketChart(document.querySelector("#markets tr.on")?.dataset.symbol);
+});
 $("range").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
@@ -368,10 +506,11 @@ $("range").addEventListener("click", (e) => {
 async function refresh() {
   try {
     await loadEvents();
-    await Promise.all([loadState(), loadChart(), loadTrades(), loadJournal(), loadProposals(), loadLiquidity(), loadResearch(), loadSentiment(), loadFiles(), loadScorecard(), loadKnowledge(), loadCalls()]);
+    await Promise.all([loadState(), loadChart(), loadTrades(), loadJournal(), loadProposals(), loadLiquidity(), loadResearch(), loadSentiment(), loadFiles(), loadScorecard(), loadKnowledge(), loadCalls(), loadTeam(), loadMarkets(), loadClosedPositions(), loadScoreChart(), loadBriefing()]);
   } catch (err) {
     console.error(err);
   }
 }
 refresh();
+loadData();
 setInterval(refresh, 15000);
