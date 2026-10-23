@@ -13,7 +13,8 @@ describe("role status lines", () => {
   it("schedules the next trade 15 minutes after the last briefing and the journal at 21:00 UTC", () => {
     const last = now - 5 * 60 * 1000;
     expect(tradeNextLabel(last, now)).toBe(`next ${hhmm(last + 15 * 60 * 1000)}`);
-    expect(tradeNextLabel(now - 20 * 60 * 1000, now)).toBe("next run due");
+    expect(tradeNextLabel(now - 16 * 60 * 1000, now)).toBe("next run due");
+    expect(tradeNextLabel(now - 20 * 60 * 1000, now)).toBe(`next run overdue (was due ${hhmm(now - 5 * 60 * 1000)})`);
     expect(hhmm(nextJournalAt(21, now))).toBe("21:00 UTC");
   });
 });

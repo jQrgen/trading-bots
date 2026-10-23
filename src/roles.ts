@@ -4,6 +4,7 @@ import { hasGrok } from "./grok";
 export const ROLE_IDS = ["orin", "vela", "kade", "nova", "rune", "zara"] as const;
 const TRADE_EVERY_MS = 15 * 60 * 1000;
 const RUN_WINDOW_MS = 30 * 60 * 1000;
+const GRACE_MS = 3 * 60 * 1000; // a routine a few minutes late is normal; later than that, Grok has likely stopped calling
 
 export const brainName = (env: Env) => (env.BRAIN === "xai-api" && hasGrok(env) ? "xai-api" : env.BRAIN === "rules" ? "rules" : "grok-bot");
 
@@ -24,6 +25,7 @@ export function nextJournalAt(hourUtc: number, now = Date.now()) {
 export function tradeNextLabel(lastTs: number | null, now = Date.now()) {
   if (!lastTs) return "every 15 min";
   const next = lastTs + TRADE_EVERY_MS;
+  if (next + GRACE_MS < now) return `next run overdue (was due ${hhmm(next)})`;
   return next <= now ? "next run due" : `next ${hhmm(next)}`;
 }
 
@@ -45,6 +47,8 @@ export interface RunnerInfo {
   updated_at: number | null;
   next_run_at: number | null;
   next_journal_at: number;
+  /** True when the next run is more than a few minutes past due: Grok's routine hasn't called the desk. */
+  overdue?: boolean;
 }
 
 export interface RoleView {
@@ -104,6 +108,7 @@ export async function describeRoles(env: Env, now = Date.now()): Promise<{ runne
       updated_at: bot?.ts ?? null,
       next_run_at: nextRunAt,
       next_journal_at: journalAt,
+      overdue: !running && nextRunAt != null && nextRunAt + GRACE_MS < now,
     },
     agents,
   };

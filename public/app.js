@@ -46,7 +46,7 @@ async function loadState() {
   $("bch").textContent = fmt(s.bch_pusd);
   const r = s.runner;
   $("runner").textContent = r
-    ? `${r.name || "Cauldron Trader"} · ${r.cycle != null ? `cycle ${r.cycle}` : "no cycle yet"} ${r.state === "running" ? "running" : r.state === "complete" ? "done" : "waiting"} · ${r.next_run_at ? `next run ${utcClock(r.next_run_at)}` : "every 15 min"} · journal ${r.next_journal_at ? utcClock(r.next_journal_at) : "21:00 UTC"}`
+    ? `${r.name || "Cauldron Trader"} · ${r.cycle != null ? `cycle ${r.cycle}` : "no cycle yet"} ${r.state === "running" ? "running" : r.state === "complete" ? "done" : "waiting"} · ${r.overdue ? `next run overdue (was due ${utcClock(r.next_run_at)}; Grok hasn't called since ${ago(r.updated_at)})` : r.next_run_at ? `next run ${utcClock(r.next_run_at)}` : "every 15 min"} · journal ${r.next_journal_at ? utcClock(r.next_journal_at) : "21:00 UTC"}`
     : "One Cauldron Trader runs every role, in order, every 15 minutes.";
 
   const status = Object.fromEntries(s.agents.map((a) => [a.agent, a]));
