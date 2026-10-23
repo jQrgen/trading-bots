@@ -12,8 +12,9 @@ team's holdings of **ParyonUSD (PUSD)**. Read this file, then follow it every cy
   send funds: the desk signs, after its own risk engine and live caps. Real money means real fees and price impact, so
   prefer fewer, better trades.
 - Everything dynamic (strategy, market notes, roles, trades, lessons, research, sentiment) lives in the desk's database. Read it through the API below. Never write data to GitHub. GitHub holds code only.
-- The risk engine in the desk's code has the final say. You can be more careful than it; you can never override it.
-- Only the human owner changes the strategy and the risk limits. Suggest changes through Zara's journal.
+- The risk engine reads its rules from the desk database (`risk_limits` in every briefing) and has the final say. You can be more careful than it; you can never override it or edit the rules.
+- Only the human owner changes the strategy and the risk limits, on the desk. Suggest changes through Zara's journal. Bots cannot edit them.
+- The single-LP rule is off: the engine does not reject a buy because one liquidity provider owns the pool. The other rules stay in force, including the live caps (25 PUSD per buy, 150 PUSD of buys per 24h), the minimum pool size, stops and the daily loss halt.
 
 ## 1. What you need from the owner
 - `DESK_URL`: the trading desk, for example `https://cauldron-trading-desk.<account>.workers.dev`
@@ -68,7 +69,7 @@ curl -s -X POST -H "Authorization: Bearer $BOT_TOKEN" -H "content-type: applicat
   "note": "one sentence on the market mood"
 }'
 ```
-Returns `research`: for each signal, the on-chain facts (TVL, pool count, owner share, pool age), the rug check and 4-hour closes.
+Returns `research`: for each signal, the on-chain facts (TVL, pool count, largest LP share, pool age), the rug check and 4-hour closes. Largest-LP share is reported only. While the single-LP rule is off, that share is not a reason for the engine to reject the buy.
 
 ### 4c. Vela researches, reads X, proposes
 As **Vela**, search the web and X. Write a research note for every new token and launchpad sale, record X sentiment for
@@ -152,7 +153,7 @@ A GitHub Action deploys every merge to `main` and tells the desk, so you never n
 - Every briefing carries `guide_version`. Remember it. When it changes, re-read `$DESK_URL/grok` (this guide) before
   continuing, and update your routines if the steps changed.
 - For a day after each deploy, `recent_code_update` names the commit, its message and the changed files.
-- Roles, strategy, playbook, skills and risk limits come fresh from the database in every briefing, so they are always current.
+- Roles, strategy, playbook, skills and risk limits come fresh from the database in every briefing, so they are always current. Risk limits are read-only for you; only the owner changes them on the desk.
 
 ## 10. Self-improvement
 - The scorecard (30 days, by horizon and by signal) is in every briefing. Lean into what wins.

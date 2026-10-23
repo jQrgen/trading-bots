@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RISK_DEFAULTS } from "../src/config";
-import { parseRiskLimits, SEED } from "../src/knowledge";
+import { parseRiskLimits, saveKnowledge, SEED } from "../src/knowledge";
 
 describe("parseRiskLimits", () => {
   it("merges partial owner edits over the defaults", () => {
@@ -21,6 +21,27 @@ describe("parseRiskLimits", () => {
   it("does not mutate the defaults", () => {
     parseRiskLimits(JSON.stringify({ maxPositionPct: { short: 1 } }));
     expect(RISK_DEFAULTS.maxPositionPct.short).toBe(3);
+  });
+
+  it("stores the single-LP rule as off and keeps the other limits", () => {
+    expect(RISK_DEFAULTS.maxOwnerSharePct).toBeNull();
+    expect(parseRiskLimits("{}").maxOwnerSharePct).toBeNull();
+    expect(parseRiskLimits(JSON.stringify({ maxOwnerSharePct: null })).maxOwnerSharePct).toBeNull();
+    expect(parseRiskLimits(JSON.stringify({ maxOwnerSharePct: 90 })).maxOwnerSharePct).toBe(90);
+    expect(() => parseRiskLimits(JSON.stringify({ maxOwnerSharePct: 101 }), true)).toThrow(/maxOwnerSharePct/);
+    expect(RISK_DEFAULTS.liveMaxTradePusd).toBe(25);
+    expect(RISK_DEFAULTS.liveMaxDailyBuyPusd).toBe(150);
+    expect(RISK_DEFAULTS.minTvlBch).toEqual({ short: 5, medium: 25, long: 100 });
+    expect(RISK_DEFAULTS.maxStopPct).toBe(50);
+    expect(RISK_DEFAULTS.dailyLossHaltPct).toBe(10);
+    const stored = JSON.parse(SEED.find((d) => d.key === "risk-limits")!.body);
+    expect(stored.maxOwnerSharePct).toBeNull();
+    expect(stored.liveMaxTradePusd).toBe(25);
+    expect(stored.liveMaxDailyBuyPusd).toBe(150);
+  });
+
+  it("refuses risk-limit edits from bots", async () => {
+    await expect(saveKnowledge({} as never, "risk-limits", "{}", "vela")).rejects.toThrow(/owner/);
   });
 });
 

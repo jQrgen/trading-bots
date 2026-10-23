@@ -377,6 +377,63 @@ async function loadScorecard() {
   $("scorecard").innerHTML = table("Horizon", { all: c.overall, ...c.by_horizon }) + `<div class="mt"></div>` + table("Signal", c.by_signal) + (c.by_holding_time ? `<div class="mt"></div>` + table("Held for", c.by_holding_time) : "");
 }
 
+// Risk rules, read from the database. Read-only here; only the owner edits the stored document.
+const RISK_LABELS = {
+  maxPositionPct: "Max position (% of book)",
+  maxBookPct: "Max book by horizon (%)",
+  minTradePusd: "Minimum trade (PUSD)",
+  maxPriceImpactPct: "Max price impact (%)",
+  maxPoolSharePct: "Max share of a pool's BCH side (%)",
+  minTvlBch: "Minimum pool size (BCH)",
+  minPoolAgeHours: "Minimum pool age (hours)",
+  maxOwnerSharePct: "Single-LP limit (% of liquidity)",
+  maxOpenShort: "Max open short-term bets",
+  maxStopPct: "Max stop (%)",
+  dailyLossHaltPct: "Daily loss halt (%)",
+  maxTradesPerCycle: "Max trades per cycle",
+  maxBuysPerDay: "Max buys per 24h",
+  maxRiskPerTradePct: "Max stressed loss per trade (% of book)",
+  stopGapPct: "Stop overshoot assumed (%)",
+  minTargetToCostRatio: "Min target / round-trip cost",
+  maxLpPositionPct: "LP: max one pool (% of book)",
+  maxLpBookPct: "LP: max all pools (% of book)",
+  minLpTvlBch: "LP: minimum pool size (BCH)",
+  minLpPoolAgeHours: "LP: minimum pool age (hours)",
+  maxLpPoolSharePct: "LP: max share of token liquidity (%)",
+  lpStopPct: "LP stop (%)",
+  lpDrainExitPct: "LP exit if liquidity drops (% in 24h)",
+  minLpFeeAprPct: "LP minimum fee APR (%)",
+  liveMaxTradePusd: "Live cap per buy (PUSD)",
+  liveMaxDailyBuyPusd: "Live cap per 24h (PUSD)",
+  liveSlippagePct: "Live max slippage (%)",
+  liveBchReserveSats: "BCH kept for fees (sats)",
+  liveMaxFeeSats: "Max fee per swap (sats)",
+};
+const fmtRisk = (v) => (typeof v === "number" ? String(v) : v && typeof v === "object" ? ["short", "medium", "long"].filter((h) => v[h] != null).map((h) => `${h} ${v[h]}`).join(" · ") : String(v));
+function riskRulesTable(limits) {
+  const entries = Object.entries(limits);
+  entries.sort((a, b) => (a[0] === "maxOwnerSharePct" ? -1 : b[0] === "maxOwnerSharePct" ? 1 : 0));
+  const rows = entries.map(([k, v]) => {
+    const off = v == null;
+    return `<tr><td>${esc(RISK_LABELS[k] || k)}</td><td class="num">${off ? '<span class="chip">off</span>' : esc(fmtRisk(v))}</td></tr>`;
+  });
+  const mid = Math.ceil(rows.length / 2);
+  const table = (part) => `<table><tr><th>Rule</th><th class="num">Limit</th></tr>${part.join("")}</table>`;
+  return `<div class="risk-grid">${table(rows.slice(0, mid))}${table(rows.slice(mid))}</div>`;
+}
+let riskSig = "";
+async function loadRiskRules() {
+  const limits = await get("/api/risk-limits");
+  if (!limits || limits.error || limits.maxStopPct == null) {
+    $("riskrules").innerHTML = `<p class="empty">Risk rules are unavailable.</p>`;
+    return;
+  }
+  const sig = JSON.stringify(limits);
+  if (sig === riskSig) return;
+  riskSig = sig;
+  $("riskrules").innerHTML = riskRulesTable(limits);
+}
+
 // Team knowledge: everything the bots read, with history. The owner can edit.
 let kb = [];
 let kbKey = "strategy";
@@ -419,7 +476,11 @@ function renderDoc(historyRows) {
   const hist = historyRows
     ? `<h2 class="mt">History</h2>${historyRows.map((h) => `<details><summary>Version ${h.version} · ${esc(h.updated_by)} · ${new Date(h.updated_at).toLocaleString()}</summary><pre>${esc(h.body)}</pre></details>`).join("")}`
     : "";
-  $("kb-doc").innerHTML = meta + `<pre>${esc(d.body)}</pre>` + hist;
+  let bodyHtml = `<pre>${esc(d.body)}</pre>`;
+  if (d.key === "risk-limits") {
+    try { bodyHtml = riskRulesTable(JSON.parse(d.body)); } catch { /* keep the raw document */ }
+  }
+  $("kb-doc").innerHTML = meta + bodyHtml + hist;
 }
 
 $("kb-list").addEventListener("click", (e) => {
@@ -609,7 +670,7 @@ $("range").addEventListener("click", (e) => {
 async function refresh() {
   try {
     await loadEvents();
-    await Promise.all([loadState(), loadChart(), loadTrades(), loadJournal(), loadProposals(), loadLiquidity(), loadResearch(), loadSentiment(), loadFiles(), loadScorecard(), loadKnowledge(), loadCalls(), loadTeam(), loadMarkets(), loadClosedPositions(), loadScoreChart(), loadBriefing()]);
+    await Promise.all([loadState(), loadChart(), loadTrades(), loadJournal(), loadProposals(), loadLiquidity(), loadResearch(), loadSentiment(), loadFiles(), loadScorecard(), loadKnowledge(), loadRiskRules(), loadCalls(), loadTeam(), loadMarkets(), loadClosedPositions(), loadScoreChart(), loadBriefing()]);
   } catch (err) {
     console.error(err);
   }

@@ -35,8 +35,10 @@ describe("checkBuy", () => {
     expect(checkBuy(proposal({ stop_pct: 80 }), facts(), book(), false).pass).toBe(false);
   });
 
-  it("rejects rug signals", () => {
-    expect(checkBuy(proposal(), facts({ topOwnerSharePct: 99 }), book(), false).reasons.join()).toMatch(/rug/);
+  it("rejects thin, young and unknown pools, and does not reject a single LP unless that rule is on", () => {
+    expect(checkBuy(proposal(), facts({ topOwnerSharePct: 100 }), book(), false).pass).toBe(true);
+    const on = { ...RISK_DEFAULTS, maxOwnerSharePct: 90 };
+    expect(checkBuy(proposal(), facts({ topOwnerSharePct: 99 }), book(), false, on).reasons.join()).toMatch(/one LP/);
     expect(checkBuy(proposal(), facts({ tvlBch: 3 }), book(), false).pass).toBe(false);
     expect(checkBuy(proposal({ horizon: "short", size_pct: 2 }), facts({ poolAgeHours: 2 }), book(), false).pass).toBe(false);
     expect(checkBuy(proposal(), undefined, book(), false).pass).toBe(false);
@@ -124,6 +126,7 @@ describe("liquidity providing", () => {
     const ok = checkProvide(proposal({ action: "provide", size_pct: 10, stop_pct: 20 }), facts({ feeAprPct: 30 }), lp, false);
     expect(ok.pass).toBe(true);
     expect(ok.allowedPusd).toBeLessThanOrEqual(100);
+    expect(checkProvide(proposal({ action: "provide", size_pct: 10 }), facts({ topOwnerSharePct: 100, feeAprPct: 30 }), lp, false).pass).toBe(true);
     expect(checkProvide(proposal({ action: "provide", size_pct: 10 }), facts({ feeAprPct: 2 }), lp, false).reasons.join()).toMatch(/fee APR/);
     expect(checkProvide(proposal({ action: "provide", size_pct: 10 }), facts({ tvlBch: 10 }), lp, false).pass).toBe(false);
     const tiny = checkProvide(proposal({ action: "provide", size_pct: 10 }), facts({ tvlBch: 26 }), { ...lp, totalPusd: 100000 }, false);

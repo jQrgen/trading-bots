@@ -39,6 +39,11 @@ export interface RiskVerdict {
   reasons: string[];
 }
 
+/** True when the stored single-LP limit is on and this pool's largest LP is over it. null means the rule is off. */
+export function singleLpOver(sharePct: number, limitPct: number | null): boolean {
+  return limitPct != null && sharePct > limitPct;
+}
+
 /** Deterministic pre-trade checks. Can only shrink or reject a proposal, never enlarge it. */
 export function checkBuy(p: Proposal, facts: TokenFacts | undefined, book: Book, halted: boolean, RISK: RiskLimits = RISK_DEFAULTS): RiskVerdict {
   const reasons: string[] = [];
@@ -55,7 +60,7 @@ export function checkBuy(p: Proposal, facts: TokenFacts | undefined, book: Book,
   if (!f.canQuote) reasons.push("router can't quote this token");
   if (f.tvlBch < RISK.minTvlBch[h]) reasons.push(`liquidity ${f.tvlBch.toFixed(1)} BCH below ${RISK.minTvlBch[h]} BCH for ${h}`);
   if (f.poolAgeHours < RISK.minPoolAgeHours[h]) reasons.push(`pool age ${f.poolAgeHours.toFixed(0)}h below ${RISK.minPoolAgeHours[h]}h for ${h}`);
-  if (f.topOwnerSharePct > RISK.maxOwnerSharePct) reasons.push(`one LP owns ${f.topOwnerSharePct.toFixed(0)}% of liquidity (rug risk)`);
+  if (singleLpOver(f.topOwnerSharePct, RISK.maxOwnerSharePct)) reasons.push(`one LP owns ${f.topOwnerSharePct.toFixed(0)}% of liquidity (rug risk)`);
   if (h === "short" && book.heldPusd === 0 && book.openShort >= RISK.maxOpenShort) reasons.push(`already ${book.openShort} open short-term bets`);
   if ((book.buysToday ?? 0) >= RISK.maxBuysPerDay) reasons.push(`already ${book.buysToday} buys in 24h (limit ${RISK.maxBuysPerDay}); thin market, no churn`);
   if (reasons.length) return { pass: false, allowedPusd: 0, reasons };
@@ -118,7 +123,7 @@ export function checkProvide(p: Proposal, facts: TokenFacts | undefined, book: L
   if (!f.canQuote) reasons.push("router can't quote this token");
   if (f.tvlBch < RISK.minLpTvlBch) reasons.push(`liquidity ${f.tvlBch.toFixed(1)} BCH below ${RISK.minLpTvlBch} BCH for a pool`);
   if (f.poolAgeHours < RISK.minLpPoolAgeHours) reasons.push(`pool age ${f.poolAgeHours.toFixed(0)}h below ${RISK.minLpPoolAgeHours}h`);
-  if (f.topOwnerSharePct > RISK.maxOwnerSharePct) reasons.push(`one LP owns ${f.topOwnerSharePct.toFixed(0)}% of liquidity (rug risk)`);
+  if (singleLpOver(f.topOwnerSharePct, RISK.maxOwnerSharePct)) reasons.push(`one LP owns ${f.topOwnerSharePct.toFixed(0)}% of liquidity (rug risk)`);
   if (f.feeAprPct !== undefined && f.feeAprPct < RISK.minLpFeeAprPct) reasons.push(`estimated fee APR ${f.feeAprPct.toFixed(1)}% below ${RISK.minLpFeeAprPct}%`);
   if (reasons.length) return { pass: false, allowedPusd: 0, reasons };
 
