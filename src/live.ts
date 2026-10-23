@@ -1,4 +1,4 @@
-import { broadcastTx, routerBuild, symbolOf } from "./cauldron";
+import { activePools, broadcastTx, routerBuild, symbolOf } from "./cauldron";
 import { PUSD, type Env, type RiskLimits } from "./config";
 import { DEFAULT_SERVERS, electrum, listUnspent } from "./chain/electrum";
 import { bytesToHex, decodeTx, txidOf } from "./chain/tx";
@@ -243,8 +243,28 @@ export async function dryRunSwap(env: Env, L: Ledger, RISK: RiskLimits, o: { sel
     const parent = await electrum(servers(env), "blockchain.transaction.get", [i.txid]).then(() => true, () => false);
     inputs.push({ txid: i.txid, vout: i.vout, ours: mine.has(`${i.txid}:${i.vout}`), parent_tx_known: parent, utxo });
   }
+  // Is the router's pool state current? Compare with the chain tip and the indexer's live pools.
+  const tip = await electrum(servers(env), "blockchain.headers.subscribe", []).then((h) => (h as { height?: number }).height, (e: Error) => e.message);
+  const parents: Record<string, unknown> = {};
+  for (const id of new Set(inputs.filter((i) => !i.ours).map((i) => i.txid))) {
+    parents[id] = await electrum(servers(env), "blockchain.transaction.get", [id, true])
+      .then((t) => { const v = t as { confirmations?: number; blockhash?: string; time?: number; vout?: unknown[] }; return { confirmations: v.confirmations ?? 0, blockhash: v.blockhash ?? null, time: v.time ?? null, outputs: v.vout?.length }; }, (e: Error) => ({ error: e.message }));
+  }
+  const token = o.sell === "bch" ? o.buy : o.sell;
+  const rows = (await activePools(token).catch(() => [])) as Array<Record<string, unknown>>;
+  const indexer_pools = [];
+  for (const r of rows.slice(0, 8)) {
+    const txid = String(r.txid ?? r.tx_hash ?? r.utxo_txid ?? "");
+    const vout = Number(r.tx_pos ?? r.vout ?? r.utxo_vout ?? r.out_idx ?? -1);
+    const utxo = txid && vout >= 0 ? await electrum(servers(env), "blockchain.utxo.get_info", [txid, vout]).catch((e: Error) => ({ error: e.message })) : "no outpoint in row";
+    indexer_pools.push({ row: r, utxo });
+  }
   return {
     verdict,
+    tip,
+    parents,
+    indexer_pool_count: rows.length,
+    indexer_pools,
     route: b.route,
     expected_output: b.expected_output,
     fee_sats: b.fee_sats,
