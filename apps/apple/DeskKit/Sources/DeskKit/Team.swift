@@ -90,4 +90,14 @@ public struct AgentCard: Identifiable, Hashable, Sendable {
     public var lastEvent: DeskEvent?
 
     public var id: String { member.id }
+
+    /// Hide the old "idle, waiting for Grok Bot" line. The latest event is what that role last concluded.
+    public var displayStatus: String {
+        if let status, status.range(of: "idle, waiting", options: .caseInsensitive) == nil { return status }
+        if let lastEvent {
+            let cycle = lastEvent.cycle.map { "Cycle \($0): " } ?? ""
+            return cycle + lastEvent.message
+        }
+        return status ?? "Waiting for Cauldron Trader"
+    }
 }

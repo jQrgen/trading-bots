@@ -10,6 +10,17 @@ public struct DemoDesk: DeskService {
 
     private func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
 
+    private func nextJournal(_ now: Date) -> Date {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+        var parts = cal.dateComponents(in: cal.timeZone, from: now)
+        parts.hour = 21
+        parts.minute = 0
+        parts.second = 0
+        let today = cal.date(from: parts) ?? now
+        return today > now ? today : today.addingTimeInterval(86_400)
+    }
+
     public func state() async throws -> DeskState {
         let positions = demoPositions.filter(\.isOpen)
         return DeskState(
@@ -22,15 +33,17 @@ public struct DemoDesk: DeskService {
             ],
             positions: positions,
             agents: [
-                AgentStatus(agent: "nova", status: "Approved 1 of 2 proposals", updatedAt: ago(4)),
-                AgentStatus(agent: "orin", status: "Scanned 214 tokens, 3 signals", updatedAt: ago(6)),
-                AgentStatus(agent: "vela", status: "Writing thesis on FURU", updatedAt: ago(5)),
-                AgentStatus(agent: "kade", status: "Vetoed DCASH: pool too thin", updatedAt: ago(5)),
-                AgentStatus(agent: "rune", status: "Filled BUY FURU (paper)", updatedAt: ago(3)),
-                AgentStatus(agent: "zara", status: "Journal due 21:00 UTC", updatedAt: ago(40)),
+                AgentStatus(agent: "nova", status: "Cycle 412: Approved FURU, rejected DCASH · next 16:15 UTC", updatedAt: ago(4)),
+                AgentStatus(agent: "orin", status: "Cycle 412: Scanned 214 tokens, 3 signals · next 16:15 UTC", updatedAt: ago(6)),
+                AgentStatus(agent: "vela", status: "Cycle 412: FURU thesis, DCASH proposal · next 16:15 UTC", updatedAt: ago(5)),
+                AgentStatus(agent: "kade", status: "Cycle 412: Passed FURU, vetoed DCASH (pool too thin) · next 16:15 UTC", updatedAt: ago(5)),
+                AgentStatus(agent: "rune", status: "Cycle 412: Filled BUY FURU (paper) · next 16:15 UTC", updatedAt: ago(3)),
+                AgentStatus(agent: "zara", status: "Cycle 411: Journal written · journal 21:00 UTC", updatedAt: ago(40)),
             ],
             stats: .init(closed: 9, wins: 6, winRate: 6.0 / 9.0, realizedPusd: 31.80),
-            grokBot: GrokBotStatus(tokenCreatedAt: ago(60 * 24 * 2), lastSeen: ago(4))
+            grokBot: GrokBotStatus(tokenCreatedAt: ago(60 * 24 * 2), lastSeen: ago(4)),
+            runner: RunnerStatus(name: "Cauldron Trader", brain: "grok-bot", cycle: 412, state: "complete",
+                                 updatedAt: ago(4), nextRunAt: now.addingTimeInterval(11 * 60), nextJournalAt: nextJournal(now))
         )
     }
 

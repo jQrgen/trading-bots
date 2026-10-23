@@ -8,7 +8,7 @@ struct AgentsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Metrics.spacing) {
                 StatusBanner()
-                Text("The loop: " + store.team.loop.map(store.team.displayName).joined(separator: " → "))
+                Text("Cauldron Trader runs every role in order, every 15 minutes: " + store.team.loop.map(store.team.displayName).joined(separator: " → "))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 TeamGraphView()
@@ -99,7 +99,7 @@ struct AgentDetailView: View {
                                 .font(.callout).foregroundStyle(.secondary)
                         }
                     }
-                    LabeledContent("Status", value: card.status ?? "Waiting for first cycle")
+                    LabeledContent("Status", value: card.displayStatus)
                     LabeledContent("Updated", value: Format.relative(card.updatedAt))
                     LabeledContent("Reports to", value: card.member.reportsTo.map(store.team.displayName).joined(separator: ", "))
                     if !card.member.tools.isEmpty {

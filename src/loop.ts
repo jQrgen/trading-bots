@@ -7,6 +7,7 @@ import { Prices, simulateSwap } from "./market";
 import { scorecard, sizeScale, type Scorecard } from "./scorecard";
 import { checkBuy, checkProvide, exitSignal, type Book, type Proposal, type TokenFacts } from "./risk";
 import { feeAprPct, lpCandidates, lpValue, openLps, provide, tendLps, withdraw } from "./lp";
+import { publishRoleStatus, refreshRoles } from "./roles";
 
 /*
  * A trading cycle has two halves:
@@ -47,7 +48,7 @@ export async function runCycle(env: Env): Promise<void> {
     } catch (err) {
       await L.log("desk", "error", `Cycle ${L.cycle} failed: ${(err as Error).message}`);
     } finally {
-      for (const a of ["orin", "vela", "kade", "nova", "rune", "zara"] as const) await L.status(a, idleText(env));
+      await refreshRoles(env);
     }
   });
 }
@@ -75,8 +76,6 @@ async function markSighted(env: Env, L: Ledger) {
     await L.log("kade", "alert", `Market data is back after ${Math.round((Date.now() - Number(since)) / 60000)} min blind. Stops were checked again this cycle.`);
   }
 }
-
-const idleText = (env: Env) => (brainOf(env) === "grok-bot" ? "idle, waiting for Grok Bot" : "idle, next cycle in 15 min");
 
 async function withLock(env: Env, fn: () => Promise<void>) {
   // One cycle at a time: a slow cycle must not overlap the next tick.
@@ -522,7 +521,7 @@ export async function runJournal(env: Env): Promise<void> {
     const wins = stats.closed_24h.filter((c) => Number(c.exit_pusd) > Number(c.cost_pusd)).length;
     await recordJournal(env, L, `${stats.closed_24h.length} positions closed in 24h, ${wins} winners. ${stats.failed_or_vetoed_24h} proposals failed risk checks or were vetoed. Portfolio ${round(stats.value_now ?? 0)} PUSD.`, []);
   }
-  await L.status("zara", idleText(env));
+  await publishRoleStatus(env);
 }
 
 // ---------- Shared helpers ----------
@@ -582,7 +581,7 @@ async function openPosition(L: Ledger, prices: Prices, p: Proposal, sizePusd: nu
     entry_price_pusd: sizePusd / whole, target_pct: p.target_pct, stop_pct: p.stop_pct, signal: p.signal ?? null, thesis: p.thesis,
   });
   await L.recordTrade({ side: "buy", token_id: p.token_id, symbol, amount: fill.amountOut, pusd: sizePusd, price_pusd: sizePusd / whole, impact_pct: fill.impactPct, estimated: fill.estimated, position_id: positionId, reason: p.thesis });
-  await L.log("rune", "fill", `PAPER BUY ${round(whole, 4)} ${symbol} for ${round(sizePusd)} PUSD (impact ${fill.impactPct.toFixed(2)}%${fill.estimated ? ", estimated" : ""}). Target +${p.target_pct}%, stop -${p.stop_pct}%.`, fill);
+  await L.log("rune", "fill", `PAPER BUY ${round(whole, 4)} ${symbol} for ${round(sizePusd)} PUSD (impact ${fill.impactPct.toFixed(2)}%${fill.estimated ? ", estimated" : ""}${fill.reservePriced ? ", pool reserves" : ""}). Target +${p.target_pct}%, stop -${p.stop_pct}%.`, fill);
   return { side: "buy", symbol, pusd: round(sizePusd), amount: fill.amountOut, impact_pct: round(fill.impactPct), estimated: fill.estimated, position_id: positionId };
 }
 
@@ -595,7 +594,7 @@ async function closePosition(L: Ledger, prices: Prices, pos: Position, reason: s
   const pnl = outPusd - pos.cost_pusd;
   const whole = pos.amount / 10 ** prices.decimals(pos.token_id);
   await L.recordTrade({ side: "sell", token_id: pos.token_id, symbol: pos.symbol, amount: pos.amount, pusd: outPusd, price_pusd: whole ? outPusd / whole : 0, impact_pct: fill.impactPct, estimated: fill.estimated, position_id: pos.id, reason });
-  await L.log("rune", "fill", `PAPER SELL ${pos.symbol} for ${round(outPusd)} PUSD, ${pnl >= 0 ? "+" : ""}${round(pnl)} PUSD (${round((pnl / pos.cost_pusd) * 100, 1)}%). ${reason}.`, { ...fill, pnl });
+  await L.log("rune", "fill", `PAPER SELL ${pos.symbol} for ${round(outPusd)} PUSD, ${pnl >= 0 ? "+" : ""}${round(pnl)} PUSD (${round((pnl / pos.cost_pusd) * 100, 1)}%). ${reason}${fill.reservePriced ? " (priced from pool reserves)" : ""}.`, { ...fill, pnl });
   return { side: "sell", symbol: pos.symbol, pusd: round(outPusd), pnl_pusd: round(pnl), position_id: pos.id };
 }
 

@@ -27,6 +27,8 @@ public struct DeskState: Decodable, Sendable {
     public var stats: Stats
     /// When the Grok Bot app last talked to the desk, and why a call was last rejected.
     public var grokBot: GrokBotStatus?
+    /// The single routine that plays every role. Absent on older desks.
+    public var runner: RunnerStatus?
 
     public struct Stats: Decodable, Sendable {
         public var closed: Int
@@ -53,7 +55,8 @@ public struct DeskState: Decodable, Sendable {
     }
 
     public init(mode: TradingMode, halted: Bool, startPusd: Double?, totalPusd: Double?, updatedAt: Date?, bchPusd: Double?,
-                holdings: [Holding], positions: [Position], agents: [AgentStatus], stats: Stats, grokBot: GrokBotStatus? = nil) {
+                holdings: [Holding], positions: [Position], agents: [AgentStatus], stats: Stats, grokBot: GrokBotStatus? = nil,
+                runner: RunnerStatus? = nil) {
         self.mode = mode
         self.halted = halted
         self.startPusd = startPusd
@@ -65,6 +68,7 @@ public struct DeskState: Decodable, Sendable {
         self.agents = agents
         self.stats = stats
         self.grokBot = grokBot
+        self.runner = runner
     }
 
     public init(from decoder: Decoder) throws {
@@ -80,10 +84,11 @@ public struct DeskState: Decodable, Sendable {
         agents = (try? c.decodeIfPresent(LossyArray<AgentStatus>.self, forKey: .agents))?.items ?? []
         stats = (try? c.decodeIfPresent(Stats.self, forKey: .stats)) ?? Stats()
         grokBot = try? c.decodeIfPresent(GrokBotStatus.self, forKey: .grokBot)
+        runner = try? c.decodeIfPresent(RunnerStatus.self, forKey: .runner)
     }
 
     enum CodingKeys: String, CodingKey {
-        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats, grokBot
+        case mode, halted, startPusd, totalPusd, updatedAt, bchPusd, holdings, positions, agents, stats, grokBot, runner
     }
 
     /// Profit since the paper (or live) start balance.
@@ -214,6 +219,60 @@ public struct AgentStatus: Decodable, Hashable, Sendable {
         self.agent = agent
         self.status = status
         self.updatedAt = updatedAt
+    }
+}
+
+/// Part of GET /api/state — the one routine that plays every role.
+public struct RunnerStatus: Decodable, Hashable, Sendable {
+    public var name: String
+    public var brain: String?
+    public var cycle: Int?
+    public var state: String
+    public var updatedAt: Date?
+    public var nextRunAt: Date?
+    public var nextJournalAt: Date?
+
+    public init(name: String, brain: String? = nil, cycle: Int? = nil, state: String, updatedAt: Date? = nil,
+                nextRunAt: Date? = nil, nextJournalAt: Date? = nil) {
+        self.name = name
+        self.brain = brain
+        self.cycle = cycle
+        self.state = state
+        self.updatedAt = updatedAt
+        self.nextRunAt = nextRunAt
+        self.nextJournalAt = nextJournalAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? "Cauldron Trader"
+        brain = try? c.decodeIfPresent(String.self, forKey: .brain)
+        cycle = try? c.decodeIfPresent(Int.self, forKey: .cycle)
+        state = (try? c.decodeIfPresent(String.self, forKey: .state)) ?? "waiting"
+        updatedAt = try? c.decodeIfPresent(Date.self, forKey: .updatedAt)
+        nextRunAt = try? c.decodeIfPresent(Date.self, forKey: .nextRunAt)
+        nextJournalAt = try? c.decodeIfPresent(Date.self, forKey: .nextJournalAt)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name, brain, cycle, state, updatedAt, nextRunAt, nextJournalAt
+    }
+
+    /// Cycle, whether the routine is running, and the next expected times.
+    public var summary: String {
+        let cycleText = cycle.map { "cycle \($0)" } ?? "no cycle yet"
+        let stateText = state == "running" ? "running" : state == "complete" ? "done" : "waiting"
+        let next = nextRunAt.map { "next run \(Self.clock($0))" } ?? "every 15 min"
+        let journal = nextJournalAt.map { "journal \(Self.clock($0))" } ?? "journal 21:00 UTC"
+        return "\(name) · \(cycleText) \(stateText) · \(next) · \(journal)"
+    }
+
+    private static func clock(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "HH:mm"
+        return f.string(from: date) + " UTC"
     }
 }
 

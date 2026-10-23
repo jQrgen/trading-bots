@@ -29,7 +29,10 @@ export interface Pool {
   owner_pkh?: string;
   pkh?: string;
   sats: number;
-  token_amount: number;
+  /** Base units of the token. The indexer field is `tokens`. */
+  tokens: number;
+  /** Alternate name used by older fixtures. */
+  token_amount?: number;
 }
 
 export interface Quote {
@@ -57,9 +60,14 @@ export const tokensByIds = (ids: string[]) =>
   ids.length ? getJson<TokenInfo[]>(`/tokens/list_cached_by_ids?ids=${ids.join(",")}`) : Promise.resolve([]);
 
 export const activePools = (token: string) =>
-  getJson<Pool[] | { active: Pool[] }>(`/pool/active?token=${token}`).then((r) =>
-    Array.isArray(r) ? r : r.active ?? [],
-  );
+  getJson<Array<Partial<Pool>> | { active?: Array<Partial<Pool>> }>(`/pool/active?token=${token}`).then((r) => {
+    const rows = Array.isArray(r) ? r : r.active ?? [];
+    return rows.map((p) => ({
+      ...p,
+      sats: Number(p.sats),
+      tokens: Number(p.tokens ?? p.token_amount ?? 0),
+    })) as Pool[];
+  });
 
 export interface Candle { ts?: number; open: number; high: number; low: number; close: number }
 
