@@ -149,10 +149,14 @@ public struct DemoDesk: DeskService {
     public func knowledgeHistory(key: String) async throws -> [KnowledgeVersion] {
         let current = try await knowledge().first { $0.key == key }
         guard let current else { return [] }
-        return (1...current.version).reversed().map { v in
-            KnowledgeVersion(version: v, body: v == current.version ? current.body : "(earlier version \(v))",
-                             updatedBy: v == 1 ? "seed" : current.updatedBy, updatedAt: ago(Double(current.version - v + 1) * 600))
+        var versions: [KnowledgeVersion] = []
+        for v in stride(from: current.version, through: 1, by: -1) {
+            let body: String = v == current.version ? current.body : "(earlier version \(v))"
+            let who: String = v == 1 ? "seed" : current.updatedBy
+            let minutes = Double(current.version - v + 1) * 10
+            versions.append(KnowledgeVersion(version: v, body: body, updatedBy: who, updatedAt: ago(minutes)))
         }
+        return versions
     }
 
     public func scorecard() async throws -> Scorecard? {
