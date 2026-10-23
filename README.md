@@ -15,7 +15,7 @@ Live mode trades real money on Cauldron from one dedicated hot wallet. It is off
 
 1. **Wallet.** Make a fresh wallet just for the bots (for example in Cashonize) and save its 12-word seed phrase as the `WALLET_SEED` GitHub secret (or a single key as `WALLET_WIF`). The deploy copies it into a Worker secret. The key is never stored in D1, logged, or shown to the agents. The desk derives the address at `m/44'/145'/0'/0/0`; check that it matches your wallet app before funding.
 2. **Fund it** with PUSD to trade and about 0.01 BCH for network fees. The desk always keeps `liveBchReserveSats` of BCH for fees.
-3. **Go live** on the desk (Owner login, Live wallet panel, type GO LIVE). The paper book is archived (kept, not scored), and holdings become whatever the chain says the wallet holds.
+3. **Go live** on the desk (Owner login, Live wallet panel, type GO LIVE). First the desk swaps all BCH above the fee reserve into PUSD (owner's rule: start from PUSD); if that swap fails, nothing changes. The paper book is archived (kept, not scored), and holdings become whatever the chain says the wallet holds.
 
 How a live trade runs (`src/live.ts`, `src/chain/`): the risk engine and the live caps size the order (`liveMaxTradePusd`, `liveMaxDailyBuyPusd`). The Cauldron router builds an unsigned transaction (`tx.build`). The desk checks the wallet's net change per asset against the order (sells at most the order amount, receives at least the quote minus `liveSlippagePct`, spends at most `liveMaxFeeSats` of BCH on fees, touches no other token, and signs only our own inputs). Only then does it sign and broadcast through `broadcast.cauldron.quest`. Each trade links its transaction.
 

@@ -711,3 +711,30 @@ async function ensureWallet(env: Env, L: Ledger) {
 }
 
 export { loadKnowledge };
+
+/**
+ * Owner's rule for going live: start from PUSD. Swaps every BCH above the fee reserve (and one swap's fee allowance)
+ * into PUSD with the same build, check, sign and broadcast as any live trade. Returns null when there is nothing to swap.
+ */
+export async function convertBchToPusd(env: Env, RISK: RiskLimits) {
+  const L = await newCycle(env);
+  const bal = balancesOf(await coinsFor(env, L, await loadWallet(env), true));
+  const total = Number(bal.get("bch") ?? 0n) - RISK.liveBchReserveSats;
+  // Fee allowance: miner fee plus the router's 0.1% taken in BCH, with room to spare.
+  const maxFeeSats = RISK.liveMaxFeeSats + Math.ceil(total * 0.003);
+  const sats = total - maxFeeSats;
+  if (sats < 100_000) return null; // under 0.001 BCH: not worth a swap
+  const prices = new Prices(new Map((await tokensByIds([PUSD])).map((t) => [t.token_id, t])));
+  const quote = await simulateSwap("bch", PUSD, sats, prices);
+  if (quote.estimated || quote.amountOut <= 0) throw new Error("no router quote for BCH to PUSD right now; try again in a minute");
+  const r = await liveSwap(env, L, RISK, { sell: "bch", buy: PUSD, amount: BigInt(sats), expectedOut: BigInt(quote.amountOut), maxFeeSats });
+  const pusd = Number(r.bought) / 100;
+  return { txid: r.txid, bch: Number(r.sold) / 1e8, pusd, impactPct: quote.impactPct, cycle: L.cycle };
+}
+
+/** Record the go-live conversion once the desk is live, so it shows as a live trade with its transaction. */
+export async function recordConversion(env: Env, c: NonNullable<Awaited<ReturnType<typeof convertBchToPusd>>>) {
+  const L = new Ledger(env, c.cycle);
+  await L.recordTrade({ side: "convert", token_id: "bch", symbol: "BCH", amount: Math.round(c.bch * 1e8), pusd: c.pusd, price_pusd: c.pusd / c.bch, impact_pct: c.impactPct, estimated: false, position_id: null, reason: "Go live: all BCH above the fee reserve swapped to PUSD (owner's rule)", txid: c.txid });
+  await L.log("rune", "fill", `LIVE CONVERT ${round(c.bch, 5)} BCH to ${round(c.pusd)} PUSD before trading starts, tx ${explorerTx(c.txid)}.`, c);
+}
