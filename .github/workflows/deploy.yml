@@ -68,8 +68,17 @@ jobs:
           COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | jq -R . | jq -sc . || echo '[]')
-          jq -n --arg sha "$GITHUB_SHA" --arg message "${COMMIT_MESSAGE:-manual deploy}" --argjson files "$FILES" \
-            '{sha: $sha, message: $message, files: $files}' |
-          curl -fsS -X POST "$DESK_URL/api/admin/deployed" \
-            -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" --data @-
+          BODY=$(jq -n --arg sha "$GITHUB_SHA" --arg message "${COMMIT_MESSAGE:-manual deploy}" --argjson files "$FILES" \
+            '{sha: $sha, message: $message, files: $files}')
+          # New secrets take a few seconds to reach the Worker, so retry.
+          for i in 1 2 3 4 5 6; do
+            curl -fsS -X POST "$DESK_URL/api/admin/deployed" \
+              -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" --data "$BODY" && break
+            [ $i = 6 ] && exit 1
+            sleep $((i * 5))
+          done
           curl -fsS -X POST "$DESK_URL/api/admin/run" -H "authorization: Bearer $ADMIN_TOKEN"
+          sleep 20
+          echo "Desk state after the first cycle:"
+          curl -fsS "$DESK_URL/api/state" | jq -c '{mode, halted, total_pusd, agents: [.agents[]? | {agent, status}]}' || true
+          curl -fsS "$DESK_URL/api/events?limit=10" | jq -r '.[] | "\(.agent) \(.kind): \(.message)"' || true
