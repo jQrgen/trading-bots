@@ -70,6 +70,13 @@ export function allocate(pools: PoolCoin[], sellBch: boolean, amount: bigint, ch
   return alloc;
 }
 
+/** What the pools would pay for `amount` right now, split the same way a build splits it. */
+export function quotePools(pools: PoolCoin[], sellBch: boolean, amount: bigint): bigint {
+  let out = 0n;
+  for (const [i, a] of allocate(pools, sellBch, amount)) out += sellBch ? tokensOut(pools[i], a) : satsOut(pools[i], a);
+  return out;
+}
+
 const TOKEN_DUST = 1000n;
 const P2PKH_INPUT_BYTES = 148n; // with a 72-byte signature and compressed key
 

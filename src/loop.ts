@@ -8,7 +8,8 @@ import { scorecard, sizeScale, type Scorecard } from "./scorecard";
 import { checkBuy, checkProvide, exitSignal, type Book, type Proposal, type TokenFacts } from "./risk";
 import { feeAprPct, lpCandidates, lpValue, openLps, provide, tendLps, withdraw } from "./lp";
 import { publishRoleStatus, refreshRoles } from "./roles";
-import { coinsFor, explorerTx, liveSwap, loadWallet, syncHoldings, balancesOf } from "./live";
+import { coinsFor, explorerTx, livePools, liveSwap, loadWallet, syncHoldings, balancesOf } from "./live";
+import { quotePools } from "./chain/pools";
 
 /*
  * A trading cycle has two halves:
@@ -725,8 +726,13 @@ export async function convertBchToPusd(env: Env, RISK: RiskLimits) {
   const sats = total - maxFeeSats;
   if (sats < 100_000) return null; // under 0.001 BCH: not worth a swap
   const prices = new Prices(new Map((await tokensByIds([PUSD])).map((t) => [t.token_id, t])));
-  const quote = await simulateSwap("bch", PUSD, sats, prices);
-  if (quote.estimated || quote.amountOut <= 0) throw new Error("no router quote for BCH to PUSD right now; try again in a minute");
+  // Quote from the pools' live coins (the router's view can be stale), and refuse if that is far off the indexer's price.
+  const pools = await livePools(env, PUSD);
+  const out = Number(quotePools(pools, true, BigInt(sats)));
+  const ref = prices.info(PUSD)?.price_now; // sats per whole PUSD
+  if (out <= 0) throw new Error("no live PUSD pools to quote BCH to PUSD right now; try again in a minute");
+  if (ref && out < (sats / ref) * 100 * 0.95) throw new Error(`pools pay ${out / 100} PUSD for ${sats / 1e8} BCH, over 5% below the indexer price; not converting`);
+  const quote = { amountOut: out, impactPct: ref ? Math.max(0, (1 - out / ((sats / ref) * 100)) * 100) : 0 };
   const r = await liveSwap(env, L, RISK, { sell: "bch", buy: PUSD, amount: BigInt(sats), expectedOut: BigInt(quote.amountOut), maxFeeSats });
   const pusd = Number(r.bought) / 100;
   return { txid: r.txid, bch: Number(r.sold) / 1e8, pusd, impactPct: quote.impactPct, cycle: L.cycle };
