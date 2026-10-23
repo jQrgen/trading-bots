@@ -104,6 +104,16 @@ public struct KnowledgeVersion: Decodable, Identifiable, Hashable, Sendable {
         self.updatedBy = updatedBy
         self.updatedAt = updatedAt
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(Int.self, forKey: .version)
+        body = (try? c.decodeIfPresent(String.self, forKey: .body)) ?? ""
+        updatedBy = (try? c.decodeIfPresent(String.self, forKey: .updatedBy)) ?? "–"
+        updatedAt = try? c.decodeIfPresent(Date.self, forKey: .updatedAt)
+    }
+
+    enum CodingKeys: String, CodingKey { case version, body, updatedBy, updatedAt }
 }
 
 /// GET /api/scorecard — the rolling track record the team uses to resize its bets.

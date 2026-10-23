@@ -121,6 +121,13 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.openLiquidity.count, 1)
         XCTAssertEqual(store.closedLiquidity.count, 1)
         XCTAssertEqual(store.review(of: 11)?.process, "minor")
+        XCTAssertEqual(store.markets.first?.symbol, "FURU")
+        XCTAssertGreaterThan(store.scorecardHistory.count, 1)
+        let ticks = try? await store.service.ticks(token: "furu", days: 7)
+        XCTAssertEqual(ticks?.count, 96)
+        XCTAssertEqual(ticks.map { $0.map(\.ts) }, ticks.map { $0.map(\.ts).sorted() }, "oldest first")
+        let history = try? await store.service.fileHistory(path: "notes/handover.md")
+        XCTAssertEqual(history?.first?.version, 12)
         XCTAssertEqual(store.scorecard?.holdingTimes.map { $0.label }, ["1-24h", "1-7d"])
 
         // A second refresh only asks for newer events and must not duplicate.
@@ -169,6 +176,11 @@ final class StoreTests: XCTestCase {
             func file(path: String) async throws -> BotFile { throw DeskError.http(status: 404, message: nil) }
             func liquidity() async throws -> [LiquidityPosition] { [] }
             func reviews() async throws -> [TradeReview] { [] }
+            func markets() async throws -> [MarketTick] { [] }
+            func ticks(token: String, days: Int) async throws -> [MarketTick] { [] }
+            func fileHistory(path: String) async throws -> [KnowledgeVersion] { [] }
+            func scorecards(days: Int) async throws -> [Scorecard] { [] }
+            func briefing() async throws -> String? { nil }
         }
         let store = DeskStore(service: Down())
         await store.refresh()
@@ -334,5 +346,41 @@ final class LiquidityTests: XCTestCase {
         let t = Date()
         XCTAssertTrue(Trade(id: 1, ts: t, mode: .paper, side: "lp-in", tokenId: "a", symbol: "A", amount: 1, pusd: 1, pricePusd: nil,
                             impactPct: nil, estimated: false, positionId: nil, reason: nil).isBuy)
+    }
+}
+
+final class MarketTests: XCTestCase {
+    let decoder = DeskDecoder.make()
+
+    func testMarketsAndTicks() throws {
+        let m = #"[{"ts":1761220800000,"token_id":"abc","symbol":"ABC","price_pusd":0.0123,"tvl_bch":30.5,"chg_24h_pct":-4.2,"volume_sats":250000000}]"#
+        let markets = try decoder.decode(LossyArray<MarketTick>.self, from: Data(m.utf8)).items
+        XCTAssertEqual(markets.first?.id, "abc")
+        XCTAssertEqual(markets.first?.chg24hPct, -4.2)
+        XCTAssertEqual(markets.first?.volumeBch, 2.5)
+
+        let t = #"[{"ts":1761220800000,"price_pusd":0.01,"tvl_bch":30,"chg_24h_pct":null,"volume_sats":null},{"ts":1761224400000,"price_pusd":0.011}]"#
+        let ticks = try decoder.decode(LossyArray<MarketTick>.self, from: Data(t.utf8)).items
+        XCTAssertEqual(ticks.count, 2)
+        XCTAssertNil(ticks[0].tokenId)
+        XCTAssertNotEqual(ticks[0].id, ticks[1].id)
+    }
+
+    func testFileHistoryAllowsMissingAuthor() throws {
+        let h = #"[{"version":3,"body":"# v3","updated_by":null,"updated_at":1761220800000},{"version":2,"body":"# v2","updated_by":"vela","updated_at":1761217200000}]"#
+        let versions = try decoder.decode(LossyArray<KnowledgeVersion>.self, from: Data(h.utf8)).items
+        XCTAssertEqual(versions.map(\.version), [3, 2])
+        XCTAssertEqual(versions[1].updatedBy, "vela")
+    }
+
+    func testBriefingFormatting() {
+        XCTAssertNil(PrettyJSON.format(Data("null".utf8)))
+        let pretty = PrettyJSON.format(Data(#"{"b":1,"a":[2]}"#.utf8)) ?? ""
+        XCTAssertTrue(pretty.contains("\n"), "pretty-printed")
+        XCTAssertLessThan(pretty.range(of: "\"a\"")!.lowerBound, pretty.range(of: "\"b\"")!.lowerBound, "keys sorted")
+
+        let client = try? DeskClient(urlString: "desk.example.dev")
+        XCTAssertEqual(client?.url("api/files/notes/a.md", ["history": "1"]).absoluteString, "https://desk.example.dev/api/files/notes/a.md?history=1")
+        XCTAssertEqual(client?.url("api/ticks", ["token": "abc", "days": "7"]).absoluteString, "https://desk.example.dev/api/ticks?days=7&token=abc")
     }
 }

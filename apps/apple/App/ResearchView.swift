@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 import DeskKit
 
 /// What the team finds before it trades: the mood on X, new tokens on Cauldron and the launchpad,
@@ -20,6 +21,23 @@ struct ResearchView: View {
                 Text("Mood on X")
             } footer: {
                 Text("Grok reads posts about BCH and Cauldron every cycle and scores them from -1 to +1.")
+            }
+            Section {
+                if store.markets.isEmpty {
+                    Text("No market data yet.").foregroundStyle(.secondary)
+                }
+                ForEach(store.markets.prefix(25)) { tick in
+                    NavigationLink(value: tick) { MarketRow(tick: tick) }
+                }
+            } header: {
+                Text("Markets")
+            } footer: {
+                Text("The latest scan of each Cauldron pool, largest first. Open one for its price chart.")
+            }
+            Section {
+                NavigationLink(value: BriefingRoute()) {
+                    Label("Latest Grok Bot briefing", systemImage: "doc.text.magnifyingglass")
+                }
             }
             Section {
                 if store.tokens.isEmpty {
@@ -53,6 +71,8 @@ struct ResearchView: View {
         .navigationTitle("Research")
         .navigationDestination(for: TokenSeen.self) { TokenDetailView(token: $0) }
         .navigationDestination(for: ResearchNote.self) { ResearchNoteView(note: $0) }
+        .navigationDestination(for: MarketTick.self) { MarketDetailView(tick: $0) }
+        .navigationDestination(for: BriefingRoute.self) { _ in BriefingView() }
         .deskToolbar()
     }
 }
@@ -300,11 +320,197 @@ struct BotFileView: View {
                 let f = loaded ?? file
                 Text("\(f.path) · version \(f.version) · updated \(Format.dateTime(f.updatedAt))\(f.updatedBy.map { " by \(store.team.displayName($0))" } ?? "")")
             }
+            if file.version > 1 {
+                Section {
+                    NavigationLink(value: FileHistoryRoute(file: file)) {
+                        Label("Version history", systemImage: "clock.arrow.circlepath")
+                    }
+                }
+            }
         }
         .navigationTitle(file.name)
+        .navigationDestination(for: FileHistoryRoute.self) { FileHistoryView(file: $0.file) }
         .task {
             do {
                 loaded = try await store.service.file(path: file.path)
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+}
+
+struct MarketRow: View {
+    var tick: MarketTick
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(tick.symbol ?? tick.tokenId ?? "?").font(.headline)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(Format.pusd(tick.pricePusd, decimals: 6)).monospacedDigit()
+                Text(Format.signedPct(tick.chg24hPct)).font(.caption).monospacedDigit().foregroundStyle(Color.pnl(tick.chg24hPct))
+            }
+        }
+    }
+
+    private var detail: String {
+        var parts: [String] = []
+        if let tvl = tick.tvlBch { parts.append(String(format: "%.1f BCH TVL", tvl)) }
+        if let vol = tick.volumeBch { parts.append(String(format: "%.2f BCH volume", vol)) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// One token's price history from the scanners' ticks, with its latest numbers.
+struct MarketDetailView: View {
+    @Environment(DeskStore.self) private var store
+    var tick: MarketTick
+    @State private var days = 7
+    @State private var ticks: [MarketTick] = []
+    @State private var error: String?
+    private let ranges = [(1, "24h"), (7, "7d"), (30, "30d"), (90, "90d")]
+
+    var body: some View {
+        List {
+            Section {
+                Picker("Range", selection: $days) {
+                    ForEach(ranges, id: \.0) { Text($0.1).tag($0.0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                if let error {
+                    Text(error).foregroundStyle(.secondary)
+                } else if ticks.filter({ $0.pricePusd != nil }).count < 2 {
+                    Text("Not enough ticks yet for a chart.").foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: Metrics.chartHeight)
+                } else {
+                    chart.frame(height: Metrics.chartHeight)
+                }
+            }
+            .tvFocusable()
+            Section {
+                LabeledContent("Price", value: Format.pusd(tick.pricePusd, decimals: 8) + " PUSD")
+                LabeledContent("24h change") {
+                    Text(Format.signedPct(tick.chg24hPct)).foregroundStyle(Color.pnl(tick.chg24hPct))
+                }
+                if let tvl = tick.tvlBch { LabeledContent("Pool TVL", value: String(format: "%.2f BCH", tvl)) }
+                if let vol = tick.volumeBch { LabeledContent("24h volume", value: String(format: "%.4f BCH", vol)) }
+                LabeledContent("As of", value: Format.relative(tick.ts))
+            }
+            .tvFocusable()
+            if let tokenId = tick.tokenId, let token = store.tokens.first(where: { $0.tokenId == tokenId }) {
+                Section {
+                    NavigationLink(value: token) { TokenRow(token: token) }
+                }
+            }
+        }
+        .navigationTitle(tick.symbol ?? "Market")
+        .task(id: days) { await load() }
+    }
+
+    private var chart: some View {
+        let points = ticks.compactMap { t in t.pricePusd.map { (ts: t.ts, price: $0) } }
+        let up = (points.last?.price ?? 0) >= (points.first?.price ?? 0)
+        let color: Color = up ? .up : .down
+        return Chart {
+            ForEach(Array(points.enumerated()), id: \.offset) { _, p in
+                LineMark(x: .value("Time", p.ts), y: .value("PUSD", p.price))
+                    .foregroundStyle(color)
+                    .interpolationMethod(.monotone)
+            }
+        }
+        .chartYScale(domain: .automatic(includesZero: false))
+    }
+
+    private func load() async {
+        guard let tokenId = tick.tokenId else { return }
+        do {
+            ticks = try await store.service.ticks(token: tokenId, days: days)
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+}
+
+struct BriefingRoute: Hashable {}
+
+/// The full JSON Grok Bot read at its latest briefing.
+struct BriefingView: View {
+    @Environment(DeskStore.self) private var store
+    @State private var text: String?
+    @State private var loaded = false
+    @State private var error: String?
+
+    var body: some View {
+        List {
+            Section {
+                if let error {
+                    Text(error).foregroundStyle(.secondary)
+                } else if let text {
+                    Text(text)
+                        .font(.system(.footnote, design: .monospaced))
+                        #if !os(tvOS)
+                        .textSelection(.enabled)
+                        #endif
+                        .tvFocusable()
+                } else if loaded {
+                    Text("Grok Bot hasn't read a briefing yet.").foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                }
+            } footer: {
+                Text("Everything the desk handed Grok Bot at the start of its latest cycle: market data, positions, limits and the team's notes.")
+            }
+        }
+        .navigationTitle("Latest briefing")
+        .task {
+            do {
+                text = try await store.service.briefing()
+            } catch {
+                self.error = error.localizedDescription
+            }
+            loaded = true
+        }
+    }
+}
+
+struct FileHistoryRoute: Hashable {
+    var file: BotFile
+}
+
+struct FileHistoryView: View {
+    @Environment(DeskStore.self) private var store
+    var file: BotFile
+    @State private var versions: [KnowledgeVersion] = []
+    @State private var error: String?
+
+    var body: some View {
+        List {
+            if let error {
+                Text(error).foregroundStyle(.secondary)
+            }
+            ForEach(versions) { v in
+                NavigationLink(value: v) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Version \(v.version)").font(.headline)
+                        Text("\(store.team.displayName(v.updatedBy)) · \(v.updatedAt.map(Format.dateTime) ?? "–")")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .navigationTitle("\(file.name) history")
+        .navigationDestination(for: KnowledgeVersion.self) { v in
+            KnowledgeVersionView(title: "\(file.name) v\(v.version)", text: v.body, isJSON: file.isJSON)
+        }
+        .task {
+            do {
+                versions = try await store.service.fileHistory(path: file.path)
             } catch {
                 self.error = error.localizedDescription
             }
