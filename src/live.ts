@@ -149,9 +149,10 @@ export interface LiveFill extends SwapResult { verified: true }
 export async function livePools(env: Env, category: string, top = 8): Promise<PoolCoin[]> {
   const rows = (await activePools(category)) as Array<{ owner_pkh?: string; sats: number }>;
   const owners = [...new Set(rows.sort((a, b) => b.sats - a.sats).map((r) => r.owner_pkh).filter((x): x is string => !!x && /^[0-9a-f]{40}$/.test(x)))].slice(0, top);
+  // In parallel: one Electrum round trip per pool, done one after another, made the owner's Convert slow enough for phones to give up.
+  const found = await Promise.all(owners.map((pkh) => listUnspent(servers(env), scripthash(poolScript(pkh))).catch(() => []).then((utxos) => ({ pkh, utxos }))));
   const pools: PoolCoin[] = [];
-  for (const pkh of owners) {
-    const utxos = await listUnspent(servers(env), scripthash(poolScript(pkh))).catch(() => []);
+  for (const { pkh, utxos } of found) {
     for (const u of utxos) {
       if (u.token_data?.category !== category || u.token_data.nft) continue;
       pools.push({ txid: u.tx_hash, vout: u.tx_pos, sats: BigInt(u.value), tokens: BigInt(u.token_data.amount), category, pkh });
