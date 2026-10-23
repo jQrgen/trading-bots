@@ -89,49 +89,58 @@ export function buildPoolSwap(o: {
   sell: string; buy: string; amount: bigint; minOutput: bigint;
   pools: PoolCoin[]; funding: Coin[]; script: Uint8Array; feePerByte?: bigint;
 }): BuildResult {
-  const sellBch = o.sell === "bch";
-  const category = sellBch ? o.buy : o.sell;
-  if (!sellBch && o.buy !== "bch") throw new Error("direct pool swaps are BCH <-> token only");
-  const pools = o.pools.filter((p) => p.category === category && p.sats > 0n && p.tokens > 0n);
-  if (!pools.length) throw new Error("no live pools for this token");
-  const alloc = allocate(pools, sellBch, o.amount);
-  if (!alloc.size) throw new Error("pools can't fill this order");
-  const used = [...alloc.keys()];
-
-  let got = 0n;
-  const poolOutputs: Output[] = used.map((i) => {
-    const p = pools[i], a = alloc.get(i)!;
-    const script = poolScript(p.pkh);
-    if (sellBch) {
-      const t = tokensOut(p, a);
-      got += t;
-      return { value: p.sats + a, script, token: { category, amount: p.tokens - t } };
+  if (o.sell === o.buy) throw new Error("sell and buy are the same asset");
+  // Token to token goes through BCH: sell into the first token's pools, buy from the second's, in one transaction.
+  const legs = o.sell === "bch" || o.buy === "bch"
+    ? [{ category: o.sell === "bch" ? o.buy : o.sell, sellBch: o.sell === "bch" }]
+    : [{ category: o.sell, sellBch: false }, { category: o.buy, sellBch: true }];
+  const usedPools: PoolCoin[] = [];
+  const poolOutputs: Output[] = [];
+  let amount = o.amount;
+  for (const leg of legs) {
+    const pools = o.pools.filter((p) => p.category === leg.category && p.sats > 0n && p.tokens > 0n);
+    if (!pools.length) throw new Error(`no live pools for token ${leg.category.slice(0, 8)}`);
+    const alloc = allocate(pools, leg.sellBch, amount);
+    if (!alloc.size) throw new Error("pools can't fill this order");
+    let got = 0n;
+    for (const [i, a] of alloc) {
+      const p = pools[i];
+      const script = poolScript(p.pkh);
+      usedPools.push(p);
+      if (leg.sellBch) {
+        const t = tokensOut(p, a);
+        got += t;
+        poolOutputs.push({ value: p.sats + a, script, token: { category: leg.category, amount: p.tokens - t } });
+      } else {
+        const x = satsOut(p, a);
+        got += x;
+        poolOutputs.push({ value: p.sats - x, script, token: { category: leg.category, amount: p.tokens + a } });
+      }
     }
-    const s = satsOut(p, a);
-    got += s;
-    return { value: p.sats - s, script, token: { category, amount: p.tokens + a } };
-  });
+    // A middle leg's BCH must all go into the next leg; any rounding left over stays with us as change.
+    amount = got;
+  }
+  const got = amount;
   if (got < o.minOutput) throw new Error(`pools give ${got}, floor is ${o.minOutput}`);
 
   // Our side: the sold tokens (when selling a token) plus plain BCH coins until fees are covered.
-  const sold = sellBch ? [] : o.funding.filter((c) => c.token?.category === o.sell);
+  const sold = o.sell === "bch" ? [] : o.funding.filter((c) => c.token?.category === o.sell);
   const tokIn = sold.reduce((s, c) => s + c.token!.amount, 0n);
-  if (!sellBch && tokIn < o.amount) throw new Error(`wallet has ${tokIn} of the token, order is ${o.amount}`);
+  if (o.sell !== "bch" && tokIn < o.amount) throw new Error(`wallet has ${tokIn} of the token, order is ${o.amount}`);
   const plain = o.funding.filter((c) => !c.token).sort((a, b) => Number(b.value - a.value));
   const rate = o.feePerByte ?? 1n;
 
   const ours: Coin[] = [...sold];
-  const tokenChange = tokIn - (sellBch ? 0n : o.amount);
   const outputs: Output[] = [...poolOutputs];
-  if (sellBch) outputs.push({ value: TOKEN_DUST, script: o.script, token: { category, amount: got } });
-  if (tokenChange > 0n) outputs.push({ value: TOKEN_DUST, script: o.script, token: { category, amount: tokenChange } });
+  if (o.buy !== "bch") outputs.push({ value: TOKEN_DUST, script: o.script, token: { category: o.buy, amount: got } });
+  if (tokIn > o.amount && o.sell !== "bch") outputs.push({ value: TOKEN_DUST, script: o.script, token: { category: o.sell, amount: tokIn - o.amount } });
   const change: Output = { value: 0n, script: o.script };
   outputs.push(change);
 
   const tx: Tx = { version: 2, locktime: 0, inputs: [], outputs };
   const setInputs = () => {
     tx.inputs = [
-      ...used.map((i) => ({ txid: pools[i].txid, vout: pools[i].vout, unlocking: concat(Uint8Array.of(0x44), poolRedeem(pools[i].pkh)), sequence: 0xffffffff })),
+      ...usedPools.map((p) => ({ txid: p.txid, vout: p.vout, unlocking: concat(Uint8Array.of(0x44), poolRedeem(p.pkh)), sequence: 0xffffffff })),
       ...ours.map((c) => ({ txid: c.txid, vout: c.vout, unlocking: new Uint8Array(), sequence: 0xffffffff })),
     ];
   };
@@ -141,7 +150,7 @@ export function buildPoolSwap(o: {
   };
   const inSats = () => ours.reduce((s, c) => s + c.value, 0n);
   const outSats = () => outputs.reduce((s, x) => s + x.value, 0n) - change.value;
-  const poolIn = used.reduce((s, i) => s + pools[i].sats, 0n);
+  const poolIn = usedPools.reduce((s, p) => s + p.sats, 0n);
   // BCH balance of the whole tx: pools in + ours in = all outputs + fee.
   const need = () => outSats() + fee() - poolIn + 546n;
   for (const c of plain) {
@@ -153,7 +162,7 @@ export function buildPoolSwap(o: {
   if (change.value < 546n) throw new Error("not enough plain BCH for this swap and its fee");
   setInputs();
 
-  const first = used.length;
+  const first = usedPools.length;
   return {
     unsigned_tx_hex: bytesToHex(encodeTx(tx)),
     inputs_to_sign: ours.map((_, j) => first + j),
@@ -161,6 +170,6 @@ export function buildPoolSwap(o: {
     fee_sats: "0",
     fee_token_amount: "0",
     miner_fee_sats: f.toString(),
-    route: { kind: "direct", pools: used.length, input_amount: o.amount.toString(), output_amount: got.toString() },
+    route: { kind: "direct", hops: legs.length, pools: usedPools.length, input_amount: o.amount.toString(), output_amount: got.toString() },
   };
 }

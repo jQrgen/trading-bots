@@ -116,7 +116,7 @@ function builder(env: Env, w: Wallet, coins: Coin[]) {
   return async (p: Record<string, unknown>): Promise<BuildResult> => {
     const sell = String(p.sell), buy = String(p.buy);
     try {
-      const pools = await livePools(env, sell === "bch" ? buy : sell);
+      const pools = (await Promise.all([sell, buy].filter((a) => a !== "bch").map((a) => livePools(env, a)))).flat();
       return buildPoolSwap({ sell, buy, amount: BigInt(String(p.amount)), minOutput: BigInt(String(p.min_output ?? "0")), pools, funding: fundingFor(coins, sell), script: w.script });
     } catch (e) {
       const r = await routerBuild<BuildResult>(p);
