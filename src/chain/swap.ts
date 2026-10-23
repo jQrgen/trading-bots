@@ -34,6 +34,11 @@ export interface Order {
 
 export interface SwapResult { txid: string; sold: bigint; bought: bigint; bchDelta: bigint; feeSats: bigint; spent: Coin[]; created: Coin[] }
 
+/** True only when the broadcaster returned this transaction's id. An empty reply is not acceptance. */
+export function broadcastOk(sent: unknown, txid: string): boolean {
+  return typeof sent === "string" && sent.length > 0 && sent === txid;
+}
+
 const key = (c: { txid: string; vout: number }) => `${c.txid}:${c.vout}`;
 
 /** Coins to fund an order: all coins of the sold token (or none when selling BCH) plus the plain BCH coins. */
@@ -107,7 +112,8 @@ export async function swap(wallet: Wallet, coins: Coin[], o: Order, deps: SwapDe
   const hex = bytesToHex(encodeTx(tx));
   const txid = txidOf(tx);
   const sent = await deps.broadcast(hex);
-  if (sent && sent !== txid) throw new Error(`broadcast returned ${sent}, expected ${txid}`);
+  // A locally computed txid is not a fill. The node has to accept the broadcast and return this id.
+  if (!broadcastOk(sent, txid)) throw new Error(sent ? `broadcast returned ${sent}, expected ${txid}` : "broadcast was not accepted");
   const spentCoins = tx.inputs.map((i) => ours.get(key(i))).filter((c): c is Coin => !!c);
   const created = tx.outputs.flatMap((out, vout) =>
     bytesToHex(out.script) === scriptHex && !out.token?.nft

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bytesToHex, decodeTx, encodeTx, hexToBytes, type Tx } from "../src/chain/tx";
+import { bytesToHex, decodeTx, encodeTx, hexToBytes, txidOf, type Tx } from "../src/chain/tx";
 import { walletFrom } from "../src/chain/wallet";
 import { swap, type BuildResult, type Coin, type Order } from "../src/chain/swap";
 
@@ -16,7 +16,7 @@ const coins: Coin[] = [
 ];
 
 /** A router stand-in: spends our PUSD coin and BCH coin plus a pool, pays us `got` of TOK. */
-function router(opts: { pusdBack?: bigint; got?: bigint; thief?: boolean; signPool?: boolean } = {}) {
+function router(opts: { pusdBack?: bigint; got?: bigint; thief?: boolean; signPool?: boolean; broadcast?: (hex: string) => Promise<string> } = {}) {
   let seen: Record<string, unknown> | null = null;
   const build = async (params: Record<string, unknown>): Promise<BuildResult> => {
     seen = params;
@@ -41,7 +41,8 @@ function router(opts: { pusdBack?: bigint; got?: bigint; thief?: boolean; signPo
     };
   };
   let sent = "";
-  return { deps: { build, broadcast: async (hex: string) => ((sent = hex), "") }, seen: () => seen, sent: () => sent };
+  const broadcast = opts.broadcast ?? (async (hex: string) => ((sent = hex), txidOf(decodeTx(hex))));
+  return { deps: { build, broadcast: async (hex: string) => ((sent = hex), broadcast(hex)) }, seen: () => seen, sent: () => sent };
 }
 
 const order: Order = { sell: PUSD, buy: TOK, amount: 2500n, minOutput: 4900n, maxFeeSats: 5000n };
@@ -76,5 +77,14 @@ describe("live swap", () => {
 
   it("refuses when fees would take too much BCH", async () => {
     await expect(swap(w, coins, { ...order, maxFeeSats: 100n }, router().deps)).rejects.toThrow(/BCH change/);
+  });
+
+  it("does not fill unless the broadcast is accepted", async () => {
+    const refused = router({ broadcast: async () => { throw new Error("broadcast: REJECTED dust"); } });
+    await expect(swap(w, coins, order, refused.deps)).rejects.toThrow(/REJECTED/);
+    expect(refused.sent()).not.toBe("");
+
+    await expect(swap(w, coins, order, router({ broadcast: async () => "" }).deps)).rejects.toThrow(/not accepted/);
+    await expect(swap(w, coins, order, router({ broadcast: async () => "ab".repeat(32) }).deps)).rejects.toThrow(/broadcast returned/);
   });
 });

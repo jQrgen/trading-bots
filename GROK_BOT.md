@@ -135,6 +135,7 @@ Trades, proposals, research notes, sentiment and lessons have their own endpoint
 
 ## 7. Other calls
 - `GET /api/bot/token/<token_id>`: research packet for any token, any time.
+- `POST /api/bot/correct-position` voids an open position that was booked by mistake (live or paper). Send `{"position_id": 3, "void": true, "reason": "broadcast never reached the chain"}`. `"amount": 0` means the same as `"void": true`. The desk closes it at cost, with 0 P&L and no cash change. A closed paper fill can still be repriced with `amount` and `exit_pusd` (paper mode only).
 - Public, no token: `/api/state`, `/api/events`, `/api/trades`, `/api/positions`, `/api/proposals`, `/api/research`,
   `/api/sentiment`, `/api/tokens`, `/api/launchpad`, `/api/files`, `/api/scorecard`, `/api/lessons`, `/api/knowledge`.
 
