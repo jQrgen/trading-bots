@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createVirtualMachineBCH, decodeTransaction, hexToBin } from "@bitauth/libauth";
 import { bytesToHex, decodeTx, encodeTx, type Output } from "../src/chain/tx";
 import { walletFrom } from "../src/chain/wallet";
-import { buildPoolSwap, poolScript, satsOut, tokensOut, type PoolCoin } from "../src/chain/pools";
+import { buildLp, buildPoolSwap, poolScript, signLp, summonScript, verifyLp, satsOut, tokensOut, type LpOrder, type PoolCoin } from "../src/chain/pools";
 import { verifyBuild, type Coin } from "../src/chain/swap";
 
 const w = await walletFrom({ seed: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" });
@@ -87,6 +87,77 @@ describe("direct Cauldron pool swaps", () => {
     const i = tx.outputs.findIndex((o) => o.token && o.value > 1000n);
     tx.outputs[i] = { ...tx.outputs[i], token: { category: PUSD, amount: tx.outputs[i].token!.amount - 1n } };
     expect(vmAccepts(bytesToHex(encodeTx(tx)), spent)).not.toBe(true);
+  });
+
+  function order(over: Partial<LpOrder> = {}): LpOrder {
+    return {
+      kind: "provide", pkh: w.pkh, pusd: PUSD, category: TOK, pusdIn: 1000n,
+      minPoolBch: 1n, minPoolTokens: 1n, minPusdOut: 0n, maxFeeSats: 20_000n, own: [], ...over,
+    };
+  }
+
+  function runLp(o: LpOrder) {
+    const built = buildLp({ ...o, pools, funding: coins, script: w.script, priceSats: 0n, decimals: 0 });
+    const tx = decodeTx(built.unsigned_tx_hex);
+    const wallet = new Map(coins.map((c) => [`${c.txid}:${c.vout}`, c]));
+    const known = new Map<string, { value: bigint }>();
+    for (const c of coins) known.set(`${c.txid}:${c.vout}`, { value: c.value });
+    for (const p of [...pools, ...o.own]) known.set(`${p.txid}:${p.vout}`, { value: p.sats });
+    const v = verifyLp(tx, built.inputs_to_sign, wallet, known, w.script, o);
+    signLp(w, tx, built.inputs_to_sign, o.own, coins);
+    const spent: Output[] = tx.inputs.map((i) => {
+      const p = [...pools, ...o.own].find((x) => x.txid === i.txid && x.vout === i.vout);
+      if (p) return { value: p.sats, script: poolScript(p.pkh), token: { category: p.category, amount: p.tokens } };
+      const c = wallet.get(`${i.txid}:${i.vout}`)!;
+      return { value: c.value, script: w.script, ...(c.token ? { token: c.token } : {}) };
+    });
+    return { built, tx, v, spent, hex: bytesToHex(encodeTx(tx)) };
+  }
+
+  it("locks a new pool the other pools accept, and announces it", () => {
+    const { v, tx, spent, hex } = runLp(order());
+    expect(vmAccepts(hex, spent)).toBe(true);
+    expect(v.fee >= BigInt(hex.length / 2)).toBe(true);
+    expect(v.pusdSpent).toBe(1000n);
+    expect(v.poolBch > 1n && v.poolTokens > 1n).toBe(true);
+    expect(tx.inputs.every((i) => pools.some((p) => p.txid === i.txid) || coins.some((c) => c.txid === i.txid))).toBe(true);
+    const pool = tx.outputs.find((o) => bytesToHex(o.script) === bytesToHex(poolScript(w.pkh)));
+    expect(pool?.token).toMatchObject({ category: TOK, amount: v.poolTokens });
+    expect(tx.outputs.some((o) => bytesToHex(o.script) === bytesToHex(summonScript(w.pkh)))).toBe(true);
+  });
+
+  it("refuses a pool paid to someone else, or a fee over the cap", () => {
+    const o = order();
+    const built = buildLp({ ...o, pools, funding: coins, script: w.script });
+    const tx = decodeTx(built.unsigned_tx_hex);
+    const wallet = new Map(coins.map((c) => [`${c.txid}:${c.vout}`, c]));
+    const known = new Map<string, { value: bigint }>();
+    for (const c of coins) known.set(`${c.txid}:${c.vout}`, { value: c.value });
+    for (const p of pools) known.set(`${p.txid}:${p.vout}`, { value: p.sats });
+    const stolen = decodeTx(built.unsigned_tx_hex);
+    const i = stolen.outputs.findIndex((out) => bytesToHex(out.script) === bytesToHex(poolScript(w.pkh)));
+    stolen.outputs[i] = { ...stolen.outputs[i], script: poolScript("11".repeat(20)) };
+    expect(() => verifyLp(stolen, built.inputs_to_sign, wallet, known, w.script, o)).toThrow(/pool is/);
+    expect(() => verifyLp(tx, built.inputs_to_sign, wallet, known, w.script, { ...o, maxFeeSats: 1n })).toThrow(/miner fee/);
+  });
+
+  it("adds to a pool we already own, and the owner signature spends the old one", () => {
+    const own: PoolCoin = { txid: "b1".repeat(32), vout: 1, sats: 2_000_000n, tokens: 400_000n, category: TOK, pkh: w.pkh };
+    const { v, tx, spent, hex } = runLp(order({ minPoolBch: own.sats + 1n, minPoolTokens: own.tokens + 1n, own: [own] }));
+    expect(vmAccepts(hex, spent)).toBe(true);
+    expect(v.fee >= BigInt(hex.length / 2)).toBe(true);
+    expect(v.poolBch > own.sats).toBe(true);
+    expect(v.poolTokens > own.tokens).toBe(true);
+    expect(tx.inputs.find((i) => i.txid === own.txid)!.unlocking.length).toBeGreaterThan(100);
+  });
+
+  it("withdraws our pool back to PUSD in a transaction the contracts accept", () => {
+    const own: PoolCoin = { txid: "b2".repeat(32), vout: 0, sats: 5_000_000n, tokens: 1_000_000n, category: TOK, pkh: w.pkh };
+    const { v, tx, spent, hex } = runLp(order({ kind: "withdraw", pusdIn: 0n, minPusdOut: 1n, own: [own] }));
+    expect(vmAccepts(hex, spent)).toBe(true);
+    expect(v.fee >= BigInt(hex.length / 2)).toBe(true);
+    expect(v.pusdOut > 1n).toBe(true);
+    expect(tx.outputs.some((o) => bytesToHex(o.script) === bytesToHex(poolScript(w.pkh)))).toBe(false);
   });
 
   it("prices like the constant-product formula", () => {

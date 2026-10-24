@@ -5,7 +5,7 @@ import { HDKey } from "@scure/bip32";
 import { validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { createBase58check } from "@scure/base";
-import { concat, sighash, SIGHASH_ALL_FORKID, type Output, type Tx } from "./tx";
+import { bytesToHex, concat, sighash, SIGHASH_ALL_FORKID, type Output, type Tx } from "./tx";
 
 /*
  * The bots' hot wallet: one P2PKH key. The secret lives only in the Worker (WALLET_SEED or WALLET_WIF),
@@ -19,7 +19,8 @@ export interface Wallet {
   tokenAddress: string; // bitcoincash:z... (token-aware, for receiving CashTokens)
   script: Uint8Array; // P2PKH locking script
   pubkey: Uint8Array;
-  sign(tx: Tx, index: number, spent: Output): Uint8Array; // unlocking script
+  pkh: string; // hash160(pubkey), hex. The owner of any pool this wallet creates.
+  sign(tx: Tx, index: number, spent: Output, scriptCode?: Uint8Array): Uint8Array; // unlocking script
 }
 
 export async function walletFrom(secret: { seed?: string; wif?: string; path?: string }): Promise<Wallet> {
@@ -43,8 +44,9 @@ export async function walletFrom(secret: { seed?: string; wif?: string; path?: s
     tokenAddress: cashAddress(pkh, true),
     script,
     pubkey,
-    sign(tx, index, spent) {
-      const sig = secp256k1.sign(sighash(tx, index, spent, script), priv, { lowS: true }).toDERRawBytes();
+    pkh: bytesToHex(pkh),
+    sign(tx, index, spent, scriptCode?) {
+      const sig = secp256k1.sign(sighash(tx, index, spent, scriptCode ?? script), priv, { lowS: true }).toDERRawBytes();
       const s = concat(sig, Uint8Array.of(SIGHASH_ALL_FORKID));
       return concat(Uint8Array.of(s.length), s, Uint8Array.of(pubkey.length), pubkey);
     },

@@ -7,7 +7,7 @@ A native SwiftUI app that shows what the bot team is doing. It is **read-only**:
 | Desk | LIVE/PAPER and FROZEN badges, total value in PUSD, P&L since start (or since going live, with deposits counted as capital) and over 24h net of deposits, the wallet (address with an explorer link, PUSD and BCH balances), win rate, balance chart (24h to 90d), holdings, open positions, agent tiles, latest activity |
 | Agents | Reporting structure, each agent's live status, role document, tools, its own activity log and its exact Grok prompts and replies |
 | Activity | Every event the bots log (scan, signal, proposal, risk pass/fail, decision, fill, journal…), filterable by agent, with the raw data |
-| Trades | Trade ideas (with bull and bear case, risk check and decision), fills, open and closed positions (with Zara's review), and paper liquidity positions (deposit, estimated fees, impermanent loss) |
+| Trades | Trade ideas (with bull and bear case, risk check and decision), fills, open and closed positions (with Zara's review), and liquidity positions (deposit, estimated fees, impermanent loss). Live fills link their transaction. |
 | Research | Market prices for every Cauldron pool (with a price chart per token), the full JSON of Grok Bot's latest briefing, the mood on X about BCH and Cauldron, every new token on Cauldron and the launchpad with its research status, Vela's research notes (verdict, how it could make money, sources) and launchpad sales |
 | Playbook | Realised P&L over time, the scorecard (by horizon, signal and holding time), Zara's trade reviews, the strategy, risk limits and market notes (with version history), the agents' shared notes, Zara's daily reports and the lessons |
 
@@ -76,7 +76,7 @@ The app reads these endpoints from `src/index.ts` (snake_case JSON, epoch-millis
 | `GET /api/launchpad` | Launchpad sales (`data` is a JSON string) |
 | `GET /api/files`, `/api/files/<path>` | The agents' shared notes; the text only on the single-file call |
 | `GET /api/wallet` | The desk's own wallet: live or not, frozen, address and balances (read-only) |
-| `GET /api/liquidity` | Paper liquidity positions, open first |
+| `GET /api/liquidity` | Liquidity positions, open first |
 | `GET /api/markets`, `/api/ticks?token=&days=` | Latest tick per token; one token's price series (oldest first) |
 | `GET /api/briefing` | The JSON Grok Bot read at its latest briefing (or `null`) |
 | `GET /api/files/<path>?history=1` | Every version of a shared note |

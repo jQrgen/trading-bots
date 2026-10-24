@@ -1,7 +1,9 @@
 # Skill: providing liquidity on Cauldron
 
 Besides buying and selling, the desk can earn the 0.3% pool fee by running its own liquidity pool on Cauldron.
-In paper mode the desk simulates this exactly as a real Cauldron micro-pool behaves. Vela proposes it, the risk
+In paper mode the desk simulates a Cauldron micro-pool. In live mode an approved provide or withdraw is broadcast:
+PUSD is swapped into BCH and the token, those two sides are locked in a pool the wallet owns, and a later withdraw
+sells both sides back to PUSD. Same risk engine, live caps, slippage and fee limit as a swap. Vela proposes it, the risk
 engine and Kade check it, Nova approves it.
 
 ## How a Cauldron pool earns and loses

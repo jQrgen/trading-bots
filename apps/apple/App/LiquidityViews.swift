@@ -54,7 +54,7 @@ struct LiquidityDetailView: View {
                 if let closed = position.closedAt { LabeledContent("Closed", value: Format.dateTime(closed)) }
                 if let reason = position.closeReason { LabeledContent("Close reason", value: reason) }
             } footer: {
-                Text("Paper liquidity in the Cauldron pool. Value includes estimated fees; impermanent loss is against just holding the deposit's BCH and tokens.")
+                Text("Cauldron pool. In live mode the position is on chain and the value is marked from it. Fee figures are estimates; impermanent loss is against just holding the deposit.")
             }
             if let thesis = position.thesis, !thesis.isEmpty {
                 Section("Thesis") { Text(thesis) }

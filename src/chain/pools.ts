@@ -1,5 +1,6 @@
 import { bytesToHex, concat, encodeTx, hash256, hexToBytes, type Output, type Tx } from "./tx";
-import type { BuildResult, Coin } from "./swap";
+import { walletDelta, type BuildResult, type Coin } from "./swap";
+import type { Wallet } from "./wallet";
 
 /*
  * Direct Cauldron pool swaps, built here instead of by the router.
@@ -172,4 +173,231 @@ export function buildPoolSwap(o: {
     miner_fee_sats: f.toString(),
     route: { kind: "direct", hops: legs.length, pools: usedPools.length, input_amount: o.amount.toString(), output_amount: got.toString() },
   };
+}
+
+/** OP_RETURN the indexer watches for: SUMMON + the owner's pkh, so a new pool is found before its first trade. */
+export const summonScript = (pkhHex: string) => hexToBytes(`6a0653554d4d4f4e14${pkhHex}`);
+
+const push = (b: Uint8Array) => concat(Uint8Array.of(b.length), b);
+const WITHDRAW_UNLOCK_BYTES = 180n; // sig + pubkey + redeem script, with a byte of room
+const point = (c: { txid: string; vout: number }) => `${c.txid}:${c.vout}`;
+
+/** Sell `amount` across one token's pools. sellBch means sats in, tokens out. */
+function routeLeg(pools: PoolCoin[], category: string, sellBch: boolean, amount: bigint) {
+  const list = pools.filter((p) => p.category === category && p.sats > 0n && p.tokens > 0n);
+  if (!list.length) throw new Error(`no live pools for token ${category.slice(0, 8)}`);
+  const alloc = allocate(list, sellBch, amount);
+  let spent = 0n;
+  for (const a of alloc.values()) spent += a;
+  // Selling a token has to move the whole amount. Selling BCH can stop a few sats
+  // short, where another sat buys no token; the caller keeps that BCH as change.
+  if (!alloc.size || (!sellBch && spent !== amount)) throw new Error("pools can't fill this order");
+  const used: { pool: PoolCoin; output: Output }[] = [];
+  let got = 0n;
+  for (const [i, a] of alloc) {
+    const p = list[i];
+    const script = poolScript(p.pkh);
+    if (sellBch) {
+      const t = tokensOut(p, a);
+      got += t;
+      used.push({ pool: p, output: { value: p.sats + a, script, token: { category, amount: p.tokens - t } } });
+    } else {
+      const x = satsOut(p, a);
+      got += x;
+      used.push({ pool: p, output: { value: p.sats - x, script, token: { category, amount: p.tokens + a } } });
+    }
+  }
+  if (got <= 0n) throw new Error("pools can't fill this order");
+  return { used, got };
+}
+
+export interface LpOrder {
+  kind: "provide" | "withdraw";
+  pkh: string;
+  pusd: string;
+  category: string;
+  /** Provide: PUSD base units to spend. Withdraw: 0. */
+  pusdIn: bigint;
+  minPoolBch: bigint;
+  minPoolTokens: bigint;
+  minPusdOut: bigint;
+  maxFeeSats: bigint;
+  own: PoolCoin[];
+}
+
+/**
+ * Add or remove our own Cauldron pool in one transaction.
+ * Provide sells PUSD for BCH, buys the token with half of that BCH, and locks the two sides
+ * in a pool this pkh can withdraw. An existing pool is spent (owner path) and recreated larger.
+ * Withdraw spends our pool and sells both sides back to PUSD.
+ */
+export function buildLp(o: LpOrder & {
+  pools: PoolCoin[]; funding: Coin[]; script: Uint8Array;
+  priceSats?: bigint; decimals?: number; feePerByte?: bigint;
+}): BuildResult {
+  if (o.category === o.pusd || o.category === "bch") throw new Error("a pool pairs a token with BCH");
+  const ownKeys = new Set(o.own.map(point));
+  const pools = o.pools.filter((p) => p.pkh !== o.pkh && !ownKeys.has(point(p)));
+  const own = o.own.filter((p) => p.category === o.category);
+  const ownBch = own.reduce((s, p) => s + p.sats, 0n);
+  const ownTok = own.reduce((s, p) => s + p.tokens, 0n);
+
+  let legs: { pool: PoolCoin; output: Output }[] = [];
+  let body: Output[] = [];
+  let poolBch = 0n;
+  let poolTokens = 0n;
+  let pusdOut = 0n;
+  let sellToken: string | undefined;
+  let sellAmount = 0n;
+
+  if (o.kind === "provide") {
+    if (o.pusdIn <= 0n) throw new Error("nothing to deposit");
+    const sold = routeLeg(pools, o.pusd, false, o.pusdIn);
+    const bchForTok = sold.got / 2n;
+    if (bchForTok <= 0n) throw new Error("deposit is too small to fund both sides");
+    const bought = routeLeg(pools, o.category, true, bchForTok);
+    let newBch = sold.got - bchForTok;
+    const scale = 10n ** BigInt(o.decimals ?? 0);
+    const price = o.priceSats ?? 0n;
+    if (price > 0n && scale > 0n) {
+      const value = (bought.got * price) / scale;
+      const floor = o.minPoolBch - ownBch;
+      if (value >= floor && value > 0n && value < newBch) newBch = value;
+    }
+    poolBch = newBch + ownBch;
+    poolTokens = bought.got + ownTok;
+    if (poolBch < o.minPoolBch) throw new Error(`pool BCH ${poolBch} is under the floor ${o.minPoolBch}`);
+    if (poolTokens < o.minPoolTokens) throw new Error(`pool tokens ${poolTokens} are under the floor ${o.minPoolTokens}`);
+    legs = [...sold.used, ...bought.used];
+    body = [
+      ...legs.map((l) => l.output),
+      { value: poolBch, script: poolScript(o.pkh), token: { category: o.category, amount: poolTokens } },
+      { value: 0n, script: summonScript(o.pkh) },
+    ];
+    sellToken = o.pusd;
+    sellAmount = o.pusdIn;
+  } else {
+    if (!own.length) throw new Error("no pool of ours to withdraw");
+    const tokenLeg = ownTok > 0n ? routeLeg(pools, o.category, false, ownTok) : { used: [], got: 0n };
+    const available = ownBch + tokenLeg.got;
+    const reserve = 8000n;
+    if (available <= reserve) throw new Error("pool is too small to withdraw after fees");
+    const pusdLeg = routeLeg(pools, o.pusd, true, available - reserve);
+    pusdOut = pusdLeg.got;
+    if (pusdOut < o.minPusdOut) throw new Error(`withdraw pays ${pusdOut} PUSD, floor is ${o.minPusdOut}`);
+    legs = [...tokenLeg.used, ...pusdLeg.used];
+    body = [
+      ...legs.map((l) => l.output),
+      { value: TOKEN_DUST, script: o.script, token: { category: o.pusd, amount: pusdOut } },
+    ];
+  }
+
+  const rate = o.feePerByte ?? 1n;
+  const soldCoins = sellToken ? o.funding.filter((c) => c.token?.category === sellToken) : [];
+  const tokIn = soldCoins.reduce((s, c) => s + c.token!.amount, 0n);
+  if (sellAmount > 0n && tokIn < sellAmount) throw new Error(`wallet has ${tokIn} of the token, order is ${sellAmount}`);
+  const plain = o.funding.filter((c) => !c.token).sort((a, b) => Number(b.value - a.value));
+  const ours: Coin[] = [...soldCoins];
+  const outputs: Output[] = [...body];
+  if (sellAmount > 0n && tokIn > sellAmount) outputs.push({ value: TOKEN_DUST, script: o.script, token: { category: sellToken!, amount: tokIn - sellAmount } });
+  const change: Output = { value: 0n, script: o.script };
+  outputs.push(change);
+  const tx: Tx = { version: 2, locktime: 0, inputs: [], outputs };
+  const setInputs = () => {
+    tx.inputs = [
+      ...legs.map((l) => ({ txid: l.pool.txid, vout: l.pool.vout, unlocking: push(poolRedeem(l.pool.pkh)), sequence: 0xffffffff })),
+      ...own.map((p) => ({ txid: p.txid, vout: p.vout, unlocking: new Uint8Array(), sequence: 0xffffffff })),
+      ...ours.map((c) => ({ txid: c.txid, vout: c.vout, unlocking: new Uint8Array(), sequence: 0xffffffff })),
+    ];
+  };
+  const fee = () => {
+    setInputs();
+    const extra = BigInt(ours.length) * (P2PKH_INPUT_BYTES - 41n) + BigInt(own.length) * WITHDRAW_UNLOCK_BYTES + 10n;
+    return (BigInt(encodeTx(tx).length) + extra) * rate;
+  };
+  const walletIn = () => ours.reduce((s, c) => s + c.value, 0n);
+  const poolIn = () => legs.reduce((s, l) => s + l.pool.sats, 0n);
+  const outNoChange = () => outputs.reduce((s, x) => s + x.value, 0n) - change.value;
+  const need = () => {
+    const n = outNoChange() + fee() + 546n - poolIn() - ownBch;
+    return n > 0n ? n : 0n;
+  };
+  for (const c of plain) {
+    if (walletIn() >= need()) break;
+    ours.push(c);
+  }
+  const f = fee();
+  change.value = poolIn() + ownBch + walletIn() - outNoChange() - f;
+  if (change.value < 546n) throw new Error("not enough plain BCH for this transaction and its fee");
+  if (f > o.maxFeeSats) throw new Error(`miner fee ${f} sats is over the limit ${o.maxFeeSats}`);
+  setInputs();
+  const firstOwn = legs.length;
+  return {
+    unsigned_tx_hex: bytesToHex(encodeTx(tx)),
+    inputs_to_sign: [...own.map((_, j) => firstOwn + j), ...ours.map((_, j) => firstOwn + own.length + j)],
+    expected_output: (o.kind === "provide" ? poolTokens : pusdOut).toString(),
+    fee_sats: "0",
+    fee_token_amount: "0",
+    miner_fee_sats: f.toString(),
+    route: { kind: o.kind === "provide" ? "lp-provide" : "lp-withdraw", pool_bch: poolBch.toString(), pool_tokens: poolTokens.toString(), pusd_out: pusdOut.toString(), own: own.length },
+  };
+}
+
+/** Throws unless the transaction does what the LP order asks and nothing else. */
+export function verifyLp(tx: Tx, toSign: number[], walletCoins: Map<string, Coin>, known: Map<string, { value: bigint }>, script: Uint8Array, o: LpOrder) {
+  const ownKeys = new Set(o.own.map(point));
+  const ownIdx = tx.inputs.flatMap((inp, i) => (ownKeys.has(point(inp)) ? [i] : []));
+  const walletIdx = tx.inputs.flatMap((inp, i) => (walletCoins.has(point(inp)) ? [i] : []));
+  if (ownIdx.length !== o.own.length) throw new Error("transaction does not spend our pool");
+  const expect = [...ownIdx, ...walletIdx];
+  if (toSign.length !== expect.length || toSign.some((i) => !expect.includes(i))) throw new Error(`asked to sign inputs [${toSign}] but ours are [${expect}]`);
+  for (const inp of tx.inputs) if (!known.has(point(inp))) throw new Error("transaction spends an unknown input");
+  const mine = bytesToHex(script);
+  for (const out of tx.outputs) if (out.token?.nft && bytesToHex(out.script) === mine) throw new Error("unexpected NFT output");
+  let inSats = 0n;
+  for (const inp of tx.inputs) inSats += known.get(point(inp))!.value;
+  const fee = inSats - tx.outputs.reduce((s, out) => s + out.value, 0n);
+  if (fee < 0n || fee > o.maxFeeSats) throw new Error(`miner fee ${fee} sats is over the limit ${o.maxFeeSats}`);
+  const d = walletDelta(tx, walletCoins, script);
+  for (const [k, v] of d) {
+    if (k === "bch" || k === o.pusd) continue;
+    if (k === o.category) {
+      if (v < 0n) throw new Error(`would spend ${-v} of the pooled token from the wallet`);
+      continue;
+    }
+    if (v < 0n) throw new Error(`transaction would take ${-v} of token ${k.slice(0, 8)}`);
+  }
+  if ((d.get("bch") ?? 0n) < -o.maxFeeSats) throw new Error(`BCH change ${d.get("bch")} sats is below the allowed ${-o.maxFeeSats}`);
+  const poolHex = bytesToHex(poolScript(o.pkh));
+  const locked = tx.outputs.filter((out) => bytesToHex(out.script) === poolHex && out.token?.category === o.category);
+  const poolBch = locked.reduce((s, out) => s + out.value, 0n);
+  const poolTokens = locked.reduce((s, out) => s + (out.token?.amount ?? 0n), 0n);
+  if (o.kind === "withdraw") {
+    if (locked.length) throw new Error("withdraw would leave a pool behind");
+    const got = d.get(o.pusd) ?? 0n;
+    if (got < o.minPusdOut) throw new Error(`receives ${got} PUSD, floor is ${o.minPusdOut}`);
+    return { poolBch: 0n, poolTokens: 0n, pusdOut: got, pusdSpent: 0n, fee };
+  }
+  if (!(poolBch >= o.minPoolBch) || !(poolTokens >= o.minPoolTokens)) throw new Error(`pool is ${poolBch} sats and ${poolTokens} tokens, floors are ${o.minPoolBch} and ${o.minPoolTokens}`);
+  if (!tx.outputs.some((out) => bytesToHex(out.script) === bytesToHex(summonScript(o.pkh)))) throw new Error("pool announcement missing");
+  const spent = -((d.get(o.pusd) ?? 0n) < 0n ? d.get(o.pusd)! : 0n);
+  if (spent > o.pusdIn) throw new Error(`spends ${spent} PUSD, order is ${o.pusdIn}`);
+  return { poolBch, poolTokens, pusdOut: 0n, pusdSpent: spent, fee };
+}
+
+/** Sign our pool inputs (owner withdraw path) and our wallet inputs. Pool trades stay unsigned by us. */
+export function signLp(wallet: Wallet, tx: Tx, toSign: number[], own: PoolCoin[], coins: Coin[]) {
+  for (const i of toSign) {
+    const inp = tx.inputs[i];
+    const pool = own.find((p) => p.txid === inp.txid && p.vout === inp.vout);
+    if (pool) {
+      const redeem = poolRedeem(pool.pkh);
+      const spent: Output = { value: pool.sats, script: poolScript(pool.pkh), token: { category: pool.category, amount: pool.tokens } };
+      tx.inputs[i].unlocking = concat(wallet.sign(tx, i, spent, redeem), push(redeem));
+    } else {
+      const c = coins.find((x) => x.txid === inp.txid && x.vout === inp.vout);
+      if (!c) throw new Error("signing an input the wallet doesn't have");
+      tx.inputs[i].unlocking = wallet.sign(tx, i, { value: c.value, script: wallet.script, ...(c.token ? { token: c.token } : {}) });
+    }
+  }
 }
