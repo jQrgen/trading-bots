@@ -39,7 +39,7 @@ struct TradesView: View {
                 if tab == .trades {
                     Text("* Price impact estimated from pool reserves, not a router quote.")
                 } else if tab == .liquidity {
-                    Text("Paper liquidity in Cauldron pools, open positions first. Fees are estimates.")
+                    Text("Cauldron pools, open positions first. In live mode the position is on chain. Fees are estimates.")
                 }
             }
         }

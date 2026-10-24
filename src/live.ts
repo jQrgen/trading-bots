@@ -1,15 +1,15 @@
 import { activePools, broadcastTx, routerBuild, symbolOf, tokensByIds } from "./cauldron";
 import { PUSD, type Env, type RiskLimits } from "./config";
 import { DEFAULT_SERVERS, electrum, listUnspent } from "./chain/electrum";
-import { bytesToHex, decodeTx, txidOf } from "./chain/tx";
-import { buildPoolSwap, poolScript, type PoolCoin } from "./chain/pools";
+import { bytesToHex, decodeTx, encodeTx, txidOf } from "./chain/tx";
+import { buildLp, buildPoolSwap, poolScript, signLp, verifyLp, type PoolCoin } from "./chain/pools";
 import { fundingFor, swap, type BuildResult, type Coin, type SwapResult } from "./chain/swap";
 import { scripthash, walletFrom, type Wallet } from "./chain/wallet";
 import type { Ledger } from "./ledger";
 import { Prices } from "./market";
 
 /*
- * Live mode: real swaps on Cauldron from the bots' own hot wallet.
+ * Live mode: real swaps and liquidity pools on Cauldron from the bots' own hot wallet.
  *
  *  - The owner switches it on and off on the desk (settings.mode). It is off until then.
  *  - The key is a Worker secret (WALLET_SEED or WALLET_WIF), never in D1, logs, prompts or GitHub files.
@@ -229,10 +229,88 @@ export async function liveSwap(
     broadcast: (hex: string) => broadcastAccepted(env, hex),
   };
   const r = await swap(w, coins, { sell, buy, amount: o.amount, minOutput, maxFeeSats: BigInt(o.maxFeeSats ?? RISK.liveMaxFeeSats) }, deps);
+  await remember(env, L, coins, r);
+  return { ...r, verified: true };
+}
+
+/** Cap a live buy or liquidity add. The per-trade and 24h caps are shared by both. */
+export const liveRoom = (size: number, spent: number, perTrade: number, daily: number) => Math.min(size, perTrade, daily - spent);
+
+export async function liveSpentPusd(env: Env): Promise<number> {
+  return (await env.DB.prepare("SELECT COALESCE(SUM(pusd), 0) AS s FROM trades WHERE mode = 'live' AND side IN ('buy', 'lp-in') AND ts >= ?").bind(Date.now() - 86400000).first<{ s: number }>())?.s ?? 0;
+}
+
+/** Pools this wallet owns for one token. After a fill this cycle, that result is reused so a later fill spends the new coin. */
+const cyclePools = new WeakMap<Ledger, Map<string, PoolCoin[]>>();
+
+export async function ourPools(env: Env, category: string, L?: Ledger): Promise<PoolCoin[]> {
+  const hit = L ? cyclePools.get(L)?.get(category) : undefined;
+  if (hit) return hit;
+  const w = await loadWallet(env);
+  const utxos = await listUnspent(servers(env), scripthash(poolScript(w.pkh)));
+  return utxos
+    .filter((u) => u.token_data?.category === category && !u.token_data.nft)
+    .map((u) => ({ txid: u.tx_hash, vout: u.tx_pos, sats: BigInt(u.value), tokens: BigInt(u.token_data!.amount), category, pkh: w.pkh }));
+}
+
+function rememberPool(L: Ledger, category: string, pools: PoolCoin[]) {
+  const m = cyclePools.get(L) ?? new Map();
+  m.set(category, pools);
+  cyclePools.set(L, m);
+}
+
+export interface LpFill extends LiveFill { poolBch: bigint; poolTokens: bigint; pusdOut: bigint; pusdSpent: bigint }
+
+/**
+ * One real liquidity change: provide (create or add to our pool) or withdraw (sell both sides back to PUSD).
+ * Same brakes as a swap: frozen wallet, fee cap, slippage floors, and a check that the wallet loses nothing it didn't order.
+ */
+export async function liveLp(env: Env, L: Ledger, RISK: RiskLimits, o: {
+  kind: "provide" | "withdraw"; category: string; pusdIn: bigint;
+  minPoolBch: bigint; minPoolTokens: bigint; minPusdOut: bigint; priceSats: bigint; decimals: number;
+}): Promise<LpFill> {
+  if (await isFrozen(env)) throw new Error("wallet frozen by the owner: no on-chain transactions");
+  const w = await loadWallet(env);
+  const coins = await coinsFor(env, L, w);
+  const bal = balancesOf(coins);
+  if (o.kind === "provide") {
+    if (o.pusdIn > (bal.get(PUSD) ?? 0n)) throw new Error(`wallet has ${bal.get(PUSD) ?? 0n} PUSD base units, liquidity needs ${o.pusdIn}`);
+    if ((bal.get("bch") ?? 0n) < BigInt(RISK.liveMaxFeeSats)) throw new Error("not enough BCH in the wallet for network fees");
+  }
+  const own = await ourPools(env, o.category, L);
+  const markets = (await Promise.all([PUSD, o.category].map((id) => livePools(env, id)))).flat();
+  const order = {
+    kind: o.kind, pkh: w.pkh, pusd: PUSD, category: o.category, pusdIn: o.pusdIn,
+    minPoolBch: o.minPoolBch, minPoolTokens: o.minPoolTokens, minPusdOut: o.minPusdOut, maxFeeSats: BigInt(RISK.liveMaxFeeSats), own,
+  };
+  const built = buildLp({ ...order, pools: markets, funding: fundingFor(coins, o.kind === "provide" ? PUSD : "bch"), script: w.script, priceSats: o.priceSats, decimals: o.decimals });
+  const tx = decodeTx(built.unsigned_tx_hex);
+  const walletMap = new Map(coins.map((c) => [`${c.txid}:${c.vout}`, c]));
+  const known = new Map<string, { value: bigint }>();
+  for (const c of coins) known.set(`${c.txid}:${c.vout}`, { value: c.value });
+  for (const p of [...markets, ...own]) known.set(`${p.txid}:${p.vout}`, { value: p.sats });
+  const v = verifyLp(tx, built.inputs_to_sign, walletMap, known, w.script, order);
+  signLp(w, tx, built.inputs_to_sign, own, coins);
+  const txid = await broadcastAccepted(env, bytesToHex(encodeTx(tx)));
+  const scriptHex = bytesToHex(w.script);
+  const spentCoins = tx.inputs.map((i) => walletMap.get(`${i.txid}:${i.vout}`)).filter((c): c is Coin => !!c);
+  const created: Coin[] = tx.outputs.flatMap((out, vout) =>
+    bytesToHex(out.script) === scriptHex && !out.token?.nft
+      ? [{ txid, vout, value: out.value, ...(out.token ? { token: { category: out.token.category, amount: out.token.amount } } : {}) }]
+      : []);
+  const result: SwapResult = { txid, sold: o.kind === "provide" ? v.pusdSpent : 0n, bought: o.kind === "withdraw" ? v.pusdOut : v.poolTokens, bchDelta: 0n, feeSats: v.fee, spent: spentCoins, created };
+  await remember(env, L, coins, result);
+  if (o.kind === "provide") {
+    const vout = tx.outputs.findIndex((out) => out.token?.category === o.category && bytesToHex(out.script) === bytesToHex(poolScript(w.pkh)));
+    rememberPool(L, o.category, vout < 0 ? [] : [{ txid, vout, sats: tx.outputs[vout].value, tokens: tx.outputs[vout].token!.amount, category: o.category, pkh: w.pkh }]);
+  } else rememberPool(L, o.category, []);
+  return { ...result, verified: true, poolBch: v.poolBch, poolTokens: v.poolTokens, pusdOut: v.pusdOut, pusdSpent: v.pusdSpent };
+}
+
+async function remember(env: Env, L: Ledger, coins: Coin[], r: SwapResult) {
   await forgetSpent(env, r.spent).catch(() => undefined);
   const spent = new Set(r.spent.map((c) => `${c.txid}:${c.vout}`));
   cycleCoins.set(L, [...coins.filter((c) => !spent.has(`${c.txid}:${c.vout}`)), ...r.created]);
-  return { ...r, verified: true };
 }
 
 // Nordic Crypto's explorer (the owner's choice). Its search page opens the transaction or address it finds.
@@ -289,7 +367,7 @@ export async function goLive(env: Env, RISK: RiskLimits): Promise<{ ok: boolean;
     env.DB.prepare("DELETE FROM capital_flows"),
     put(env, "live_since", String(now)),
     put(env, "mode", "live"),
-    event(env, `Owner switched the desk to LIVE trading with wallet ${w.address}. The paper book is archived. Real swaps from the next decision on.`),
+    event(env, `Owner switched the desk to LIVE trading with wallet ${w.address}. The paper book is archived. Real swaps and liquidity pools from the next decision on.`),
   ]);
   return { ok: true, address: w.address };
 }
@@ -297,7 +375,11 @@ export async function goLive(env: Env, RISK: RiskLimits): Promise<{ ok: boolean;
 /** Back to paper, only with no live positions open (sell them first, or freeze). Starts a fresh paper wallet. */
 export async function goPaper(env: Env): Promise<{ ok: boolean; error?: string }> {
   const open = (await env.DB.prepare("SELECT COUNT(*) AS n FROM positions WHERE status = 'open'").first<{ n: number }>())?.n ?? 0;
-  if ((await modeOf(env)) === "live" && open > 0) return { ok: false, error: `${open} live positions are still open: let the team sell them first (Halt buys stops new ones)` };
+  const openLp = (await env.DB.prepare("SELECT COUNT(*) AS n FROM lp_positions WHERE status = 'open'").first<{ n: number }>())?.n ?? 0;
+  if ((await modeOf(env)) === "live" && (open > 0 || openLp > 0)) {
+    const what = [open ? `${open} live positions` : "", openLp ? `${openLp} liquidity pools` : ""].filter(Boolean).join(" and ");
+    return { ok: false, error: `${what} are still open: let the team exit them first (Halt buys stops new ones)` };
+  }
   await env.DB.batch([
     env.DB.prepare("DELETE FROM holdings"),
     put(env, "mode", "paper"),

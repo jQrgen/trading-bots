@@ -8,7 +8,7 @@ import { scorecard, sizeScale, type Scorecard } from "./scorecard";
 import { checkBuy, checkProvide, exitSignal, singleLpOver, stopSellAmount, type Book, type Proposal, type TokenFacts } from "./risk";
 import { feeAprPct, lpCandidates, lpValue, openLps, provide, tendLps, withdraw } from "./lp";
 import { publishRoleStatus, refreshRoles } from "./roles";
-import { coinsFor, explorerTx, livePools, liveSwap, loadWallet, syncHoldings, balancesOf } from "./live";
+import { coinsFor, explorerTx, livePools, liveRoom, liveSpentPusd, liveSwap, loadWallet, syncHoldings, balancesOf } from "./live";
 import { quotePools } from "./chain/pools";
 
 /*
@@ -235,7 +235,7 @@ export async function briefing(env: Env, ctx: Ctx) {
   return {
     mode: ctx.live ? "live" : "paper",
     ...(ctx.live
-      ? { live_note: `LIVE: real money in the bots' own wallet. Every approved buy and sell is a real Cauldron swap. Live caps on top of the risk limits: at most ${ctx.RISK.liveMaxTradePusd} PUSD per buy and ${ctx.RISK.liveMaxDailyBuyPusd} PUSD of buys per 24h. Liquidity providing is paper-only for now, so don't propose "provide". Fees and price impact are real: prefer fewer, better trades.` }
+      ? { live_note: `LIVE: real money in the bots' own wallet. Every approved buy, sell, and liquidity change (provide or withdraw) is a real Cauldron transaction. Live caps on top of the risk limits: at most ${ctx.RISK.liveMaxTradePusd} PUSD per buy or liquidity add and ${ctx.RISK.liveMaxDailyBuyPusd} PUSD of those per 24h. Slippage and the fee limit are the same as for swaps. Fees and price impact are real: prefer fewer, better trades.` }
       : {}),
     bch_usd: round(prices.bchPusd),
     halted: ctx.halted,
@@ -335,7 +335,7 @@ export async function proposeAndCheck(L: Ledger, ctx: Ctx, raw: Omit<Proposal, "
   return { cycle: L.cycle, proposals, verdicts };
 }
 
-/** Apply Kade's vetoes and Nova's approvals to a cycle's risk-passed proposals, then execute (paper). */
+/** Apply Kade's vetoes and Nova's approvals to a cycle's risk-passed proposals, then execute. */
 export async function decideAndExecute(env: Env, L: Ledger, ctx: Ctx, kade: Verdict[], nova: Decision[], novaNote?: string) {
   const rows = (await env.DB.prepare("SELECT * FROM proposals WHERE cycle = ? AND status = 'risk_passed'").bind(L.cycle).all<Proposal & { allowed_pusd: number }>()).results;
   for (const v of kade) {
@@ -362,7 +362,7 @@ export async function decideAndExecute(env: Env, L: Ledger, ctx: Ctx, kade: Verd
     const exits = (x: Proposal) => x.action === "sell" || x.action === "withdraw";
     for (const p of approved.filter((x) => !exits(x))) await L.updateProposal(p.id, { status: "rejected", decision_note: "desk halted by owner" });
     approved = approved.filter(exits);
-    await L.log("nova", "decision", "Desk is halted by the owner: only sells go through.");
+    await L.log("nova", "decision", "Desk is halted by the owner: only sells and liquidity withdrawals go through.");
   }
 
   const fills = [];
@@ -378,17 +378,18 @@ export async function decideAndExecute(env: Env, L: Ledger, ctx: Ctx, kade: Verd
       }
       await L.updateProposal(p.id, ok ? { status: "filled" } : { status: "skipped", decision_note: "the on-chain sell did not go through; see the activity log" });
     } else if (p.action === "withdraw") {
+      let ok = false;
       for (const x of (await openLps(env)).filter((y) => y.token_id === p.token_id)) {
-        const f = await withdraw(L, ctx.prices, x, `Vela withdraw: ${p.thesis}`);
-        if (f) fills.push(f);
+        const f = await withdraw(L, ctx.prices, x, `Vela withdraw: ${p.thesis}`, ctx.RISK);
+        if (f) {
+          fills.push(f);
+          ok = true;
+        }
       }
-      await L.updateProposal(p.id, { status: "filled" });
-    } else if (p.action === "provide" && ctx.live) {
-      await L.log("rune", "skip", `Skipped adding liquidity to ${p.symbol}: liquidity providing is paper-only until live pools are built.`);
-      await L.updateProposal(p.id, { status: "skipped", decision_note: "liquidity providing is paper-only in live mode" });
+      await L.updateProposal(p.id, ok ? { status: "filled" } : { status: "skipped", decision_note: "the withdraw did not go through; see the activity log" });
     } else if (p.action === "provide") {
       const fill = await provide(L, ctx.prices, p, p.allowed_pusd, ctx.RISK);
-      await L.updateProposal(p.id, fill ? { status: "filled" } : { status: "skipped", decision_note: "price impact too high at execution" });
+      await L.updateProposal(p.id, fill ? { status: "filled" } : { status: "skipped", decision_note: "the liquidity add did not go through; see the activity log" });
       if (fill) fills.push(fill);
     } else {
       const fill = await openPosition(L, ctx.prices, p, p.allowed_pusd, ctx.RISK);
@@ -605,10 +606,10 @@ async function openPosition(L: Ledger, prices: Prices, p: Proposal, sizePusd: nu
   const symbol = p.token_id === "bch" ? "BCH" : p.symbol;
   if (live) {
     // Real money: the live caps sit on top of every other limit.
-    const spent = (await L.env.DB.prepare("SELECT COALESCE(SUM(pusd), 0) AS s FROM trades WHERE mode = 'live' AND side = 'buy' AND ts >= ?").bind(Date.now() - 86400000).first<{ s: number }>())?.s ?? 0;
-    const capped = Math.min(sizePusd, RISK.liveMaxTradePusd, RISK.liveMaxDailyBuyPusd - spent);
+    const spent = await liveSpentPusd(L.env);
+    const capped = liveRoom(sizePusd, spent, RISK.liveMaxTradePusd, RISK.liveMaxDailyBuyPusd);
     if (capped < RISK.minTradePusd) {
-      await L.log("rune", "skip", `Skipped live buy ${symbol}: ${round(spent)} of the ${RISK.liveMaxDailyBuyPusd} PUSD daily live buy limit already used.`);
+      await L.log("rune", "skip", `Skipped live buy ${symbol}: ${round(spent)} of the ${RISK.liveMaxDailyBuyPusd} PUSD daily live limit already used.`);
       return null;
     }
     if (capped < sizePusd) await L.log("rune", "risk", `Live buy ${symbol} cut from ${round(sizePusd)} to ${round(capped)} PUSD by the live limits.`);

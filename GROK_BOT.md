@@ -7,14 +7,14 @@ team's holdings of **ParyonUSD (PUSD)**. Read this file, then follow it every cy
 
 **Hard rules**
 - The desk runs in **paper** or **live** mode; the briefing's `mode` says which. The owner switches it on the desk, never you.
-  In paper mode the desk simulates every fill. In live mode every approved buy and sell is a real Cauldron swap from the
-  team's own wallet (read `live_note` in the briefing). Either way you never hold keys, never sign transactions and never
-  send funds: the desk signs, after its own risk engine and live caps. Real money means real fees and price impact, so
-  prefer fewer, better trades.
+  In paper mode the desk simulates every fill. In live mode every approved buy, sell, and liquidity change (provide or withdraw)
+  is a real Cauldron transaction from the team's own wallet (read `live_note` in the briefing). Either way you never hold keys,
+  never sign transactions and never send funds: the desk signs, after its own risk engine and live caps. Real money means real
+  fees and price impact, so prefer fewer, better trades.
 - Everything dynamic (strategy, market notes, roles, trades, lessons, research, sentiment) lives in the desk's database. Read it through the API below. Never write data to GitHub. GitHub holds code only.
 - The risk engine reads its rules from the desk database (`risk_limits` in every briefing) and has the final say. You can be more careful than it; you can never override it or edit the rules.
 - Only the human owner changes the strategy and the risk limits, on the desk. Suggest changes through Zara's journal. Bots cannot edit them.
-- The single-LP rule is off: the engine does not reject a buy because one liquidity provider owns the pool. The other rules stay in force, including the live caps (25 PUSD per buy, 150 PUSD of buys per 24h), the minimum pool size, stops and the daily loss halt.
+- The single-LP rule is off: the engine does not reject a buy because one liquidity provider owns the pool. The other rules stay in force, including the live caps (25 PUSD per buy or liquidity add, 150 PUSD of those per 24h), the minimum pool size, stops and the daily loss halt.
 
 ## 1. What you need from the owner
 - `DESK_URL`: the trading desk, for example `https://cauldron-trading-desk.<account>.workers.dev`
@@ -88,7 +88,7 @@ curl -s -X POST -H "Authorization: Bearer $BOT_TOKEN" -H "content-type: applicat
   "note": "one sentence"
 }'
 ```
-`verdict` is `opportunity`, `watch` or `avoid`. `score` runs from -1 to 1. `action` is `buy` or `sell` (sell exits a held position).
+`verdict` is `opportunity`, `watch` or `avoid`. `score` runs from -1 to 1. `action` is `buy`, `sell`, `provide` (add liquidity) or `withdraw` (remove it). In live mode provide and withdraw are broadcast, under the same caps, slippage and fee limit as a buy.
 Returns `proposals` (with ids) and `verdicts`: whether the risk engine passed each one, the PUSD size it allows and why.
 
 ### 4d. Kade and Nova decide, the desk fills
@@ -102,7 +102,7 @@ curl -s -X POST -H "Authorization: Bearer $BOT_TOKEN" -H "content-type: applicat
   "note": "one or two sentences to the team"
 }'
 ```
-Returns `fills`: the simulated trades, with price impact and fees. Doing nothing is a valid decision.
+Returns `fills`. In live mode each fill has its transaction id. Doing nothing is a valid decision.
 
 ## 5. Daily review and journal (Zara)
 First review every closed trade in `positions_to_review` (process graded apart from outcome, one finding each), then write the journal.

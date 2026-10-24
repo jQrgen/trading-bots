@@ -20,7 +20,7 @@ vi.mock("../src/cauldron", async () => {
 
 import { broadcastTx } from "../src/cauldron";
 import { electrum } from "../src/chain/electrum";
-import { broadcastAccepted } from "../src/live";
+import { broadcastAccepted, liveRoom } from "../src/live";
 
 const electrumMock = vi.mocked(electrum);
 const broadcastTxMock = vi.mocked(broadcastTx);
@@ -167,6 +167,18 @@ describe("grok guide", () => {
     expect(GROK_BOT).toMatch(/amount.: 0/);
     expect(GROK_BOT).toMatch(/0 P&L/);
     expect(GROK_BOT).toMatch(/no cash change/);
+  });
+
+  it("tells the bot that live liquidity is broadcast", () => {
+    expect(GROK_BOT).toMatch(/provide or withdraw/);
+    expect(GROK_BOT).toMatch(/transaction id/);
+    expect(GROK_BOT).not.toMatch(/paper-only|don't propose "provide"/);
+    const note = readFileSync("src/loop.ts", "utf8");
+    expect(note).toMatch(/liquidity change \(provide or withdraw\)/);
+    expect(note).not.toMatch(/paper-only/);
+    expect(liveRoom(40, 0, 25, 150)).toBe(25);
+    expect(liveRoom(20, 140, 25, 150)).toBe(10);
+    expect(liveRoom(20, 150, 25, 150)).toBe(0);
   });
 });
 
